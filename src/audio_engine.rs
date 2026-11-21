@@ -1,12 +1,12 @@
-use biquad::{Biquad, Coefficients, DirectForm2Transposed, ToHertz, Type, Q_BUTTERWORTH_F32};
+use biquad::{Biquad, Coefficients, DirectForm2Transposed, Q_BUTTERWORTH_F32, ToHertz, Type};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use wasapi::{
-    get_default_device, AudioClient, Device, DeviceCollection, Direction, SampleType, ShareMode,
-    WaveFormat,
+    AudioClient, Device, DeviceCollection, Direction, SampleType, ShareMode, WaveFormat,
+    get_default_device,
 };
 
 const BAND_CENTERS: [f32; 10] = [
@@ -165,9 +165,7 @@ impl AudioEngine {
     }
 
     pub fn set_web_eq_applied(&self, applied: bool) {
-        self.shared
-            .web_eq_applied
-            .store(applied, Ordering::Relaxed);
+        self.shared.web_eq_applied.store(applied, Ordering::Relaxed);
         let eq_on = self.shared.eq_enabled.load(Ordering::Relaxed);
         if let Ok(mut diagnostics) = self.shared.diagnostics.lock() {
             diagnostics.eq_active = match diagnostics.active_mode {
@@ -396,8 +394,7 @@ fn run_shared_monitor(shared: &EngineShared) -> anyhow::Result<()> {
         diagnostics.bit_depth = bits;
         diagnostics.channels = channels;
         diagnostics.eq_active = eq_on && eq_verified;
-        diagnostics.status_detail =
-            shared_status_text(rate, bits, channels, eq_on, eq_verified);
+        diagnostics.status_detail = shared_status_text(rate, bits, channels, eq_on, eq_verified);
     }
 
     let mut last_device_check = Instant::now();
@@ -652,9 +649,7 @@ fn run_exclusive_bridge(shared: &EngineShared) -> anyhow::Result<()> {
             } else {
                 chunk
                     .iter()
-                    .flat_map(|sample| {
-                        ((sample.clamp(-1.0, 1.0) * 32_767.0) as i16).to_le_bytes()
-                    })
+                    .flat_map(|sample| ((sample.clamp(-1.0, 1.0) * 32_767.0) as i16).to_le_bytes())
                     .collect()
             }
         } else {

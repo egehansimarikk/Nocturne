@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Sürüm Numarası (örn: 0.2.0)'
+        description: 'Sürüm Numarası (örn: 0.2.1)'
         required: true
-        default: '0.2.0'
+        default: '0.2.1'
 
 permissions:
   contents: write
@@ -43,7 +43,7 @@ jobs:
           } elseif ("${{ github.event.inputs.version }}" -ne "") {
             $v = "${{ github.event.inputs.version }}"
           } else {
-            $v = "0.2.0"
+            $v = "0.2.1"
           }
           echo "version=$v" >> $env:GITHUB_OUTPUT
 
@@ -80,35 +80,39 @@ jobs:
         with:
           tag_name: v${{ steps.ver.outputs.version }}
           name: Nocturne v${{ steps.ver.outputs.version }}
-          files: dist\Nocturne-Setup-*.exe
+          files: dist\Nocturne-Setup-v${{ steps.ver.outputs.version }}-win64.exe
           draft: false
           prerelease: false
           body: |
-            ## Nocturne v${{ steps.ver.outputs.version }} — Native Rust & GPUI Rewrite
+            ## Nocturne v${{ steps.ver.outputs.version }}
 
-            ### 🇬🇧 English — What's New & Highlights
-            - **Native Rust & GPUI Architecture:** Completely rewritten from C#/.NET into a high-performance, low-memory native Rust + GPUI desktop client.
-            - **Hi-Fi Audio Engine & 10-Band EQ:** Real-time BiQuad 10-band graphic equalizer, preamp control, custom preset management, and WASAPI output verification.
-            - **Social Integrations:** Built-in Discord Rich Presence and automatic Last.fm Scrobbling support.
-            - **In-App Update Checker:** Check and download new GitHub releases directly from the top bar or **Settings > Connections**.
-            - **Multi-Theme & Multi-Language UI:** Dynamic album cover ambient lighting, customizable themes, and multi-language interface.
+            ### 🇬🇧 English — What's New
+            - **Synced Lyrics Drawer (`Ctrl + L`):** Added a real-time time-synced (LRC) and plain lyrics panel with active line highlighting, manual refresh, and click-to-seek jumping.
+            - **Full Library & Playlist Management:** Create and delete playlists directly in-app, add or remove tracks from playlists, and toggle Loved Tracks with instant heart sync.
+            - **Artist & Album Views + History Navigation:** Clickable artist and album links with browser-style Back/Forward navigation (`Alt + Left/Right` and mouse side buttons).
+            - **Enhanced Search & Queue Controls:** Persistent search history chips, clipboard shortcuts (`Ctrl+V` / `C` / `X`), paginated search loading, shuffle/repeat modes, and queue item management.
+            - **Faster Last.fm Authentication:** Optimized the Last.fm connection and authorization flow so the login screen opens much faster than before.
+            - **Audio Engine & Volume Polish:** Smooth draggable volume slider with mute toggle (`M`), `+`/`-` volume shortcuts, and automatic EQ re-application on track changes.
 
             #### Installation (Windows)
-            1. Download `Nocturne-Setup-v${{ steps.ver.outputs.version }}-win64.exe` from the **Assets** section below.
-            2. Run the setup wizard to install Nocturne and sign in with your Deezer account.
+            1. Download **`Nocturne-Setup-v${{ steps.ver.outputs.version }}-win64.exe`** from the **Assets** section below.
+            2. Run the setup wizard to install or update Nocturne (`v${{ steps.ver.outputs.version }}`).
+            3. Launch Nocturne and click **Deezer Session** in the top bar to sign in.
 
             ---
 
-            ### 🇹🇷 Türkçe — Yenilikler & Öne Çıkanlar
-            - **Native Rust & GPUI Mimarisi:** C#/.NET altyapısından yüksek performanslı, düşük bellek tüketimli Rust + GPUI masaüstü arayüzüne geçildi.
-            - **Hi-Fi Ses Motoru & 10-Bant EQ:** Gerçek zamanlı BiQuad 10-bant grafik ekolayzer, preamp kontrolü, özel preset yönetimi ve WASAPI ses çıkış doğrulaması eklendi.
-            - **Sosyal Entegrasyonlar:** Dahili Discord Rich Presence ve otomatik Last.fm Scrobbling desteği eklendi.
-            - **Uygulama İçi Güncelleme Denetleyicisi:** Üst bardan veya **Ayarlar > Bağlantılar** sekmesinden yeni GitHub sürümlerini tek tıkla kontrol edip indirme desteği eklendi.
-            - **Çoklu Tema & Dil Desteği:** Dinamik albüm kapağı ambiyans renklendirmesi, özelleştirilebilir temalar ve çok dilli arayüz.
+            ### 🇹🇷 Türkçe — Yenilikler
+            - **Senkronize Şarkı Sözleri Paneli (`Ctrl + L`):** Aktif satır vurgulaması, manuel yenileme ve satıra tıklayarak şarkıda o saniyeye atlama özellikli zaman senkronlu (LRC) / düz söz paneli eklendi.
+            - **Tam Kitaplık & Çalma Listesi Yönetimi:** Uygulama içinden yeni çalma listesi oluşturma, liste silme, listeye şarkı ekleme/çıkarma ve Beğenilen Şarkılar senkronizasyonu eklendi.
+            - **Sanatçı & Albüm Görünümleri + Gezinme Geçmişi:** Tıklanabilir sanatçı/albüm bağlantıları ve fare yan tuşlarını da destekleyen İleri/Geri gezinme geçmişi (`Alt + Sol/Sağ`) eklendi.
+            - **Gelişmiş Arama & Çalma Sırası Kontrolleri:** Kalıcı arama geçmişi kısayolları, pano desteği (`Ctrl+V` / `C` / `X`), sayfalı arama yükleme, karıştır/tekrar modları ve sıra düzenleme özellikleri eklendi.
+            - **Daha Hızlı Last.fm Bağlantı Ekranı:** Last.fm yetkilendirme ve bağlantı akışı iyileştirilerek giriş ekranının öncekine göre çok daha hızlı açılması sağlandı.
+            - **Ses Motoru & Ses Kontrolü İyileştirmeleri:** Sürüklenebilir ses çubuğu, sessize alma (`M`), `+`/`-` ses kısayolları ve parça geçişlerinde otomatik EQ tazeleme eklendi.
 
             #### Kurulum (Windows)
-            1. Aşağıdaki **Assets** bölümünden `Nocturne-Setup-v${{ steps.ver.outputs.version }}-win64.exe` kurulum dosyasını indirin.
-            2. Kurulum sihirbazını çalıştırarak Nocturne'ü kurun ve Deezer hesabınızla giriş yapın.
+            1. Aşağıdaki **Assets** bölümünden **`Nocturne-Setup-v${{ steps.ver.outputs.version }}-win64.exe`** kurulum dosyasını indirin.
+            2. Kurulum sihirbazını çalıştırarak Nocturne **`v${{ steps.ver.outputs.version }}`** sürümünü kurun veya güncelleyin.
+            3. Uygulamayı başlatıp sağ üstteki **Deezer Oturumu** butonundan hesabınıza giriş yapın.
 
             ---
             ### Changelog / Değişiklik Geçmişi

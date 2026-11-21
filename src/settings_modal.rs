@@ -1,13 +1,13 @@
+use crate::NocturneApp;
 use crate::audio_engine::OutputShareMode;
-use crate::integrations::UpdateCheckState;
-use crate::i18n::{text, LanguageSetting};
+use crate::i18n::{LanguageSetting, text};
 use crate::icons::lucide_icon;
+use crate::integrations::UpdateCheckState;
 use crate::theme::{ThemeId, ThemePalette};
 use crate::webview_bridge::AudioQuality;
-use crate::NocturneApp;
 use gpui::{
-    div, prelude::*, px, rgb, rgba, Context, ElementId, InteractiveElement, IntoElement,
-    ParentElement, Styled,
+    Context, ElementId, InteractiveElement, IntoElement, ParentElement, Styled, div, prelude::*,
+    px, rgb, rgba,
 };
 
 const EQ_FREQS: [&str; 10] = [
@@ -125,48 +125,53 @@ impl NocturneApp {
             .pb(px(10.0))
             .border_b_1()
             .border_color(rgb(pal.border_subtle))
-            .children(SettingsTab::ALL.into_iter().enumerate().map(|(index, tab)| {
-                let selected = self.settings_tab == tab;
-                let text_col = rgb(if selected {
-                    pal.accent_soft_text
-                } else {
-                    pal.text_secondary
-                });
-                div()
-                    .id(ElementId::Name(format!("settings-tab-{index}").into()))
-                    .px(px(14.0))
-                    .py(px(7.0))
-                    .rounded(px(7.0))
-                    .bg(rgb(if selected {
-                        pal.bg_row_active
-                    } else {
-                        pal.bg_chip
-                    }))
-                    .border_1()
-                    .border_color(rgb(if selected {
-                        pal.accent
-                    } else {
-                        pal.border_subtle
-                    }))
-                    .hover(|style| style.bg(rgb(pal.bg_row_hover)))
-                    .cursor_pointer()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .text_size(px(12.0))
-                    .font_weight(if selected {
-                        gpui::FontWeight::BOLD
-                    } else {
-                        gpui::FontWeight::MEDIUM
-                    })
-                    .text_color(text_col)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.settings_tab = tab;
-                        cx.notify();
-                    }))
-                    .child(lucide_icon(tab.icon_name(), 14.0, text_col))
-                    .child(text(self.language, tab.key()))
-            }))
+            .children(
+                SettingsTab::ALL
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, tab)| {
+                        let selected = self.settings_tab == tab;
+                        let text_col = rgb(if selected {
+                            pal.accent_soft_text
+                        } else {
+                            pal.text_secondary
+                        });
+                        div()
+                            .id(ElementId::Name(format!("settings-tab-{index}").into()))
+                            .px(px(14.0))
+                            .py(px(7.0))
+                            .rounded(px(7.0))
+                            .bg(rgb(if selected {
+                                pal.bg_row_active
+                            } else {
+                                pal.bg_chip
+                            }))
+                            .border_1()
+                            .border_color(rgb(if selected {
+                                pal.accent
+                            } else {
+                                pal.border_subtle
+                            }))
+                            .hover(|style| style.bg(rgb(pal.bg_row_hover)))
+                            .cursor_pointer()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .text_size(px(12.0))
+                            .font_weight(if selected {
+                                gpui::FontWeight::BOLD
+                            } else {
+                                gpui::FontWeight::MEDIUM
+                            })
+                            .text_color(text_col)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.settings_tab = tab;
+                                cx.notify();
+                            }))
+                            .child(lucide_icon(tab.icon_name(), 14.0, text_col))
+                            .child(text(self.language, tab.key()))
+                    }),
+            )
     }
 
     fn render_modal_header(
@@ -340,8 +345,11 @@ impl NocturneApp {
         let enabled = self.lastfm.is_enabled();
         let username = self.lastfm.username();
         let is_logged_in = username.is_some();
-        let pending_auth = self.lastfm.has_pending_auth();
         let status_msg = self.lastfm.status_message();
+
+        if !is_logged_in {
+            self.lastfm.prefetch_auth_token();
+        }
 
         div()
             .flex()
@@ -426,26 +434,6 @@ impl NocturneApp {
                                                     cx.notify();
                                                 }))
                                                 .child(text(self.language, "Last.fm ile Giriş Yap")),
-                                        )
-                                    })
-                                    .when(pending_auth && !is_logged_in, |btns| {
-                                        btns.child(
-                                            div()
-                                                .id("lastfm-complete-auth")
-                                                .px(px(11.0))
-                                                .py(px(6.0))
-                                                .rounded(px(6.0))
-                                                .bg(rgb(0x166534))
-                                                .hover(|s| s.bg(rgb(0x15803D)))
-                                                .cursor_pointer()
-                                                .text_size(px(11.5))
-                                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                                .text_color(rgb(0xECFDF5))
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.lastfm.complete_auth();
-                                                    cx.notify();
-                                                }))
-                                                .child(text(self.language, "Onayladım, Bağla")),
                                         )
                                     })
                                     .when(is_logged_in, |btns| {
@@ -538,25 +526,30 @@ impl NocturneApp {
 
         let (status_text, status_color, available_ver, is_checking) = match state {
             UpdateCheckState::Idle => (
-                format!("Mevcut sürüm: v{current_ver}"),
+                format!("{}: v{current_ver}", text(self.language, "Mevcut sürüm")),
                 rgb(pal.text_secondary),
                 None,
                 false,
             ),
             UpdateCheckState::Checking => (
-                "GitHub sürümleri kontrol ediliyor...".to_string(),
+                text(self.language, "GitHub sürümleri kontrol ediliyor..."),
                 rgb(pal.accent_bright),
                 None,
                 true,
             ),
             UpdateCheckState::UpToDate => (
-                format!("Güncelsiniz (v{current_ver})"),
+                format!("{} (v{current_ver})", text(self.language, "Güncelsiniz")),
                 rgb(0x6EE7B7),
                 None,
                 false,
             ),
             UpdateCheckState::Available(info) => (
-                format!("Yeni sürüm hazır: v{} (Mevcut: v{current_ver})", info.latest_version),
+                format!(
+                    "{}: v{} ({}: v{current_ver})",
+                    text(self.language, "Yeni sürüm hazır"),
+                    info.latest_version,
+                    text(self.language, "Mevcut")
+                ),
                 rgb(0x6EE7B7),
                 Some(info.latest_version),
                 false,
@@ -573,7 +566,7 @@ impl NocturneApp {
                     .text_size(px(12.5))
                     .font_weight(gpui::FontWeight::BOLD)
                     .text_color(rgb(pal.accent_soft_text))
-                    .child("Uygulama Güncellemeleri (GitHub)"),
+                    .child(text(self.language, "Uygulama Güncellemeleri (GitHub)")),
             )
             .child(
                 div()
@@ -635,7 +628,7 @@ impl NocturneApp {
                                             cx.notify();
                                         }))
                                         .child(lucide_icon("download", 13.0, rgb(0xECFDF5)))
-                                        .child(format!("v{ver} İndir")),
+                                        .child(format!("v{ver} {}", text(self.language, "İndir"))),
                                 )
                             })
                             .child(
@@ -659,7 +652,7 @@ impl NocturneApp {
                                         cx.notify();
                                     }))
                                     .child(lucide_icon("refresh-cw", 12.5, rgb(pal.accent_bright)))
-                                    .child("Güncellemeleri Denetle"),
+                                    .child(text(self.language, "Güncellemeleri Denetle")),
                             ),
                     ),
             )
@@ -681,55 +674,51 @@ impl NocturneApp {
                     .text_color(rgb(pal.accent_soft_text))
                     .child(text(self.language, "Görünüm Teması")),
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap(px(8.0))
-                    .children(ThemeId::ALL.iter().enumerate().map(|(idx, &t_id)| {
-                        let t_pal = t_id.palette();
-                        let is_active = self.theme_id == t_id;
-                        div()
-                            .id(ElementId::Name(format!("theme-opt-{idx}").into()))
-                            .px(px(12.0))
-                            .py(px(7.0))
-                            .rounded(px(8.0))
-                            .bg(rgb(t_pal.bg_panel))
-                            .border_1()
-                            .border_color(if is_active {
-                                rgb(t_pal.accent_bright)
-                            } else {
-                                rgb(t_pal.border_strong)
-                            })
-                            .cursor_pointer()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.0))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.theme_id = t_id;
-                                this.save_config();
-                                cx.notify();
-                            }))
-                            .child(
-                                div()
-                                    .w(px(11.0))
-                                    .h(px(11.0))
-                                    .rounded(px(5.5))
-                                    .bg(rgb(t_pal.accent_bright)),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(12.0))
-                                    .font_weight(if is_active {
-                                        gpui::FontWeight::BOLD
-                                    } else {
-                                        gpui::FontWeight::NORMAL
-                                    })
-                                    .text_color(rgb(t_pal.text_primary))
-                                    .child(t_id.full_name()),
-                            )
-                    })),
-            )
+            .child(div().flex().flex_wrap().gap(px(8.0)).children(
+                ThemeId::ALL.iter().enumerate().map(|(idx, &t_id)| {
+                    let t_pal = t_id.palette();
+                    let is_active = self.theme_id == t_id;
+                    div()
+                        .id(ElementId::Name(format!("theme-opt-{idx}").into()))
+                        .px(px(12.0))
+                        .py(px(7.0))
+                        .rounded(px(8.0))
+                        .bg(rgb(t_pal.bg_panel))
+                        .border_1()
+                        .border_color(if is_active {
+                            rgb(t_pal.accent_bright)
+                        } else {
+                            rgb(t_pal.border_strong)
+                        })
+                        .cursor_pointer()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.theme_id = t_id;
+                            this.save_config();
+                            cx.notify();
+                        }))
+                        .child(
+                            div()
+                                .w(px(11.0))
+                                .h(px(11.0))
+                                .rounded(px(5.5))
+                                .bg(rgb(t_pal.accent_bright)),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(12.0))
+                                .font_weight(if is_active {
+                                    gpui::FontWeight::BOLD
+                                } else {
+                                    gpui::FontWeight::NORMAL
+                                })
+                                .text_color(rgb(t_pal.text_primary))
+                                .child(t_id.full_name()),
+                        )
+                }),
+            ))
     }
 
     fn render_language_section(
@@ -749,12 +738,11 @@ impl NocturneApp {
                     .child(text(self.language, "Dil")),
             )
             .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap(px(7.0))
-                    .children(LanguageSetting::ALL.into_iter().enumerate().map(
-                        |(index, language)| {
+                div().flex().flex_wrap().gap(px(7.0)).children(
+                    LanguageSetting::ALL
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, language)| {
                             let selected = self.language == language;
                             let label = if language == LanguageSetting::System {
                                 text(self.language, "Sistem (Otomatik)")
@@ -791,8 +779,8 @@ impl NocturneApp {
                                     cx.notify();
                                 }))
                                 .child(label)
-                        },
-                    )),
+                        }),
+                ),
             )
     }
 
@@ -970,7 +958,10 @@ impl NocturneApp {
         let eq_status = if !self.eq_enabled {
             text(self.language, "Kapalı")
         } else if diag.eq_active {
-            text(self.language, "İlk parçadan itibaren ses akışına uygulanıyor")
+            text(
+                self.language,
+                "İlk parçadan itibaren ses akışına uygulanıyor",
+            )
         } else {
             text(self.language, "Açık, WebView2 ses zincirine bağlanıyor")
         };
@@ -1319,11 +1310,7 @@ impl NocturneApp {
             )
     }
 
-    fn render_eq_section(
-        &mut self,
-        pal: ThemePalette,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render_eq_section(&mut self, pal: ThemePalette, cx: &mut Context<Self>) -> impl IntoElement {
         let bands = self.eq_bands;
         let eq_enabled = self.eq_enabled;
 
@@ -1522,11 +1509,7 @@ impl NocturneApp {
             )
     }
 
-    fn render_preamp_row(
-        &mut self,
-        pal: ThemePalette,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render_preamp_row(&mut self, pal: ThemePalette, cx: &mut Context<Self>) -> impl IntoElement {
         let preamp = self.eq_preamp_db;
         let preamp_text = format!("{preamp:+.1} dB");
 
@@ -1652,75 +1635,63 @@ impl NocturneApp {
                 )
             })
             .when(!presets.is_empty(), |section| {
-                section.child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .gap(px(6.0))
-                        .children(presets.into_iter().enumerate().map(|(idx, preset)| {
-                            let is_selected = selected_name == preset.name;
-                            let preset_name = preset.name.clone();
-                            div()
-                                .id(ElementId::Name(format!("eq-preset-{idx}").into()))
-                                .flex()
-                                .items_center()
-                                .rounded(px(6.0))
-                                .bg(rgb(if is_selected {
-                                    pal.bg_row_active
-                                } else {
-                                    pal.bg_chip
-                                }))
-                                .border_1()
-                                .border_color(if is_selected {
-                                    rgb(pal.accent)
-                                } else {
-                                    rgb(pal.border_subtle)
-                                })
-                                .child(
-                                    div()
-                                        .id(ElementId::Name(
-                                            format!("eq-preset-apply-{idx}").into(),
-                                        ))
-                                        .px(px(9.0))
-                                        .py(px(4.0))
-                                        .cursor_pointer()
-                                        .text_size(px(11.0))
-                                        .text_color(rgb(if is_selected {
-                                            pal.accent_soft_text
-                                        } else {
-                                            pal.text_primary
-                                        }))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.apply_saved_preset(idx);
-                                            cx.notify();
-                                        }))
-                                        .child(preset_name),
-                                )
-                                .child(
-                                    div()
-                                        .id(ElementId::Name(
-                                            format!("eq-preset-delete-{idx}").into(),
-                                        ))
-                                        .px(px(7.0))
-                                        .py(px(4.0))
-                                        .rounded(px(5.0))
-                                        .hover(|s| s.bg(rgb(0x7F1D1D)))
-                                        .cursor_pointer()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.delete_saved_preset(idx);
-                                            cx.notify();
-                                        }))
-                                        .child(lucide_icon(
-                                            "trash-2",
-                                            11.5,
-                                            rgb(pal.text_secondary),
-                                        )),
-                                )
-                        })),
-                )
+                section.child(div().flex().flex_wrap().gap(px(6.0)).children(
+                    presets.into_iter().enumerate().map(|(idx, preset)| {
+                        let is_selected = selected_name == preset.name;
+                        let preset_name = preset.name.clone();
+                        div()
+                            .id(ElementId::Name(format!("eq-preset-{idx}").into()))
+                            .flex()
+                            .items_center()
+                            .rounded(px(6.0))
+                            .bg(rgb(if is_selected {
+                                pal.bg_row_active
+                            } else {
+                                pal.bg_chip
+                            }))
+                            .border_1()
+                            .border_color(if is_selected {
+                                rgb(pal.accent)
+                            } else {
+                                rgb(pal.border_subtle)
+                            })
+                            .child(
+                                div()
+                                    .id(ElementId::Name(format!("eq-preset-apply-{idx}").into()))
+                                    .px(px(9.0))
+                                    .py(px(4.0))
+                                    .cursor_pointer()
+                                    .text_size(px(11.0))
+                                    .text_color(rgb(if is_selected {
+                                        pal.accent_soft_text
+                                    } else {
+                                        pal.text_primary
+                                    }))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.apply_saved_preset(idx);
+                                        cx.notify();
+                                    }))
+                                    .child(preset_name),
+                            )
+                            .child(
+                                div()
+                                    .id(ElementId::Name(format!("eq-preset-delete-{idx}").into()))
+                                    .px(px(7.0))
+                                    .py(px(4.0))
+                                    .rounded(px(5.0))
+                                    .hover(|s| s.bg(rgb(0x7F1D1D)))
+                                    .cursor_pointer()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.delete_saved_preset(idx);
+                                        cx.notify();
+                                    }))
+                                    .child(lucide_icon("trash-2", 11.5, rgb(pal.text_secondary))),
+                            )
+                    }),
+                ))
             })
             .child(
                 div()

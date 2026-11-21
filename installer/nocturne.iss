@@ -1,13 +1,16 @@
 #ifndef AppVersion
-  #define AppVersion "0.2.0"
+  #define AppVersion "0.2.1"
 #endif
 
 [Setup]
 AppId={{8E4F3A21-7C9B-4D1E-9A62-3F8B1C5D4E90}
 AppName=Nocturne
 AppVersion={#AppVersion}
+AppVerName=Nocturne {#AppVersion}
 AppPublisher=egehansimarikk
 AppPublisherURL=https://github.com/egehansimarikk/nocturne
+AppSupportURL=https://github.com/egehansimarikk/nocturne/issues
+AppUpdatesURL=https://github.com/egehansimarikk/nocturne/releases
 DefaultDirName={autopf}\Nocturne
 DefaultGroupName=Nocturne
 UninstallDisplayIcon={app}\nocturne.exe
@@ -16,6 +19,7 @@ OutputDir=..\dist
 OutputBaseFilename=Nocturne-Setup-v{#AppVersion}-win64
 Compression=lzma2/ultra64
 SolidCompression=yes
+WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=lowest

@@ -1,4 +1,4 @@
-use gpui::{svg, AssetSource, Result, Rgba, SharedString, Styled, Svg};
+use gpui::{AssetSource, Result, Rgba, SharedString, Styled, Svg, svg};
 use std::borrow::Cow;
 
 pub struct NocturneAssets;

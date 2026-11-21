@@ -1,6 +1,6 @@
 [package]
 name = "nocturne"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 authors = ["Egehan Şımarık <egehansimarikk>"]
 description = "Native Deezer Desktop Client built with Rust & GPUI featuring WASAPI Exclusive & 10-Band EQ"
@@ -25,6 +25,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 reqwest = { version = "0.13", default-features = false, features = [
     "blocking",
+    "form",
     "json",
     "rustls",
 ] }

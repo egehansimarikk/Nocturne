@@ -14,7 +14,6 @@ use webview2_com::{
     CreateCoreWebView2EnvironmentCompletedHandler, WebMessageReceivedEventHandler,
 };
 use widestring::U16CString;
-use windows::core::{factory, BOOL, HSTRING, PCWSTR, PWSTR};
 use windows::Foundation::{TypedEventHandler, Uri};
 use windows::Media::{
     MediaPlaybackStatus, MediaPlaybackType, SystemMediaTransportControls,
@@ -22,21 +21,22 @@ use windows::Media::{
 };
 use windows::Storage::Streams::RandomAccessStreamReference;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, PROPERTYKEY, RECT, WPARAM};
-use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
+use windows::Win32::Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute};
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
-use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
+use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::WinRT::ISystemMediaTransportControlsInterop;
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
 use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, FindWindowW, GetClientRect,
-    MsgWaitForMultipleObjects, PeekMessageW, RegisterClassW, SetWindowPos, ShowWindow,
-    TranslateMessage, CS_HREDRAW, CS_VREDRAW, HWND_BOTTOM, HWND_TOP, MSG, PM_REMOVE, QS_ALLINPUT,
-    SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_SHOW, SW_SHOWNOACTIVATE, WM_CLOSE, WM_DESTROY,
-    WM_SIZE, WNDCLASSW, WS_CAPTION, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_OVERLAPPED, WS_SYSMENU,
+    CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DispatchMessageW, FindWindowW,
+    GetClientRect, HWND_BOTTOM, HWND_TOP, MSG, MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW,
+    QS_ALLINPUT, RegisterClassW, SW_SHOW, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOSIZE,
+    SWP_NOZORDER, SetWindowPos, ShowWindow, TranslateMessage, WM_CLOSE, WM_DESTROY, WM_SIZE,
+    WNDCLASSW, WS_CAPTION, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_OVERLAPPED, WS_SYSMENU,
     WS_THICKFRAME,
 };
+use windows::core::{BOOL, HSTRING, PCWSTR, PWSTR, factory};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum AudioQuality {
@@ -234,11 +234,7 @@ impl Clone for WebViewShared {
 }
 
 impl WebViewShared {
-    fn new(
-        initial_eq: EqState,
-        initial_volume: f32,
-        initial_quality: StreamQualityState,
-    ) -> Self {
+    fn new(initial_eq: EqState, initial_volume: f32, initial_quality: StreamQualityState) -> Self {
         Self(Arc::new(Mutex::new(WebViewSharedInner {
             hwnd: None,
             controller: None,
@@ -376,8 +372,7 @@ impl DeezerEngine {
     }
 
     pub fn remove_track_from_favorites(&self, track_id: u64) {
-        let payload =
-            serde_json::json!({ "type": "unfavorite_track", "id": track_id }).to_string();
+        let payload = serde_json::json!({ "type": "unfavorite_track", "id": track_id }).to_string();
         post_msg_to_webview(&payload);
     }
 
@@ -438,13 +433,7 @@ impl DeezerEngine {
         post_msg_to_webview(&payload);
     }
 
-    pub fn set_eq(
-        &self,
-        enabled: bool,
-        bands: [f32; 10],
-        preamp_db: f32,
-        apply_in_webview: bool,
-    ) {
+    pub fn set_eq(&self, enabled: bool, bands: [f32; 10], preamp_db: f32, apply_in_webview: bool) {
         let state = EqState {
             enabled,
             apply_in_webview,
@@ -549,8 +538,7 @@ fn post_volume_to_webview() {
         return;
     };
     let vol = sh.0.lock().unwrap().volume.clamp(0.0, 1.0);
-    let payload =
-        serde_json::json!({ "type": "cmd", "val": format!("vol:{vol:.3}") }).to_string();
+    let payload = serde_json::json!({ "type": "cmd", "val": format!("vol:{vol:.3}") }).to_string();
     post_msg_to_webview(&payload);
 }
 
@@ -618,16 +606,14 @@ fn bind_smtc_to_window(
             match btn {
                 SystemMediaTransportControlsButton::Play
                 | SystemMediaTransportControlsButton::Pause => {
-                    let payload =
-                        serde_json::json!({ "type": "cmd", "val": "toggle" }).to_string();
+                    let payload = serde_json::json!({ "type": "cmd", "val": "toggle" }).to_string();
                     post_msg_to_webview(&payload);
                 }
                 SystemMediaTransportControlsButton::Next => {
                     let _ = tx.send(EngineEvent::TrackEnded);
                 }
                 SystemMediaTransportControlsButton::Previous => {
-                    let payload =
-                        serde_json::json!({ "type": "cmd", "val": "prev" }).to_string();
+                    let payload = serde_json::json!({ "type": "cmd", "val": "prev" }).to_string();
                     post_msg_to_webview(&payload);
                 }
                 _ => {}
@@ -835,8 +821,8 @@ fn start_webview_environment(hwnd: HWND, tx: &Sender<EngineEvent>) {
 
                             let tx_msg = tx_clone.clone();
                             let mut token = 0i64;
-                            let msg_handler = WebMessageReceivedEventHandler::create(Box::new(
-                                move |_, args| {
+                            let msg_handler =
+                                WebMessageReceivedEventHandler::create(Box::new(move |_, args| {
                                     if let Some(args) = args {
                                         let mut raw = PWSTR::null();
                                         if args.TryGetWebMessageAsString(&mut raw).is_ok()
@@ -857,7 +843,8 @@ fn start_webview_environment(hwnd: HWND, tx: &Sender<EngineEvent>) {
                                                 if let Ok(list) =
                                                     serde_json::from_str::<Vec<UserPlaylist>>(json)
                                                 {
-                                                    let _ = tx_msg.send(EngineEvent::Playlists(list));
+                                                    let _ =
+                                                        tx_msg.send(EngineEvent::Playlists(list));
                                                 }
                                             } else if let Some(id_str) =
                                                 msg.strip_prefix("NOCTURNE_USER_ID:")
@@ -882,13 +869,14 @@ fn start_webview_environment(hwnd: HWND, tx: &Sender<EngineEvent>) {
                                                 if let Ok(result) =
                                                     serde_json::from_str::<ActionResult>(json)
                                                 {
-                                                    let _ = tx_msg.send(EngineEvent::ActionResult {
-                                                        success: result.success,
-                                                        message: result.message,
-                                                        kind: result.kind,
-                                                        track_id: result.track_id,
-                                                        playlist_id: result.playlist_id,
-                                                    });
+                                                    let _ =
+                                                        tx_msg.send(EngineEvent::ActionResult {
+                                                            success: result.success,
+                                                            message: result.message,
+                                                            kind: result.kind,
+                                                            track_id: result.track_id,
+                                                            playlist_id: result.playlist_id,
+                                                        });
                                                 }
                                             } else if msg == "NOCTURNE_TRACK_ENDED" {
                                                 let _ = tx_msg.send(EngineEvent::TrackEnded);
@@ -930,8 +918,7 @@ fn start_webview_environment(hwnd: HWND, tx: &Sender<EngineEvent>) {
                                         }
                                     }
                                     Ok(())
-                                },
-                            ));
+                                }));
                             let _ = wv.add_WebMessageReceived(&msg_handler, &mut token);
 
                             let url = U16CString::from_str("https://www.deezer.com/").unwrap();
@@ -944,8 +931,8 @@ fn start_webview_environment(hwnd: HWND, tx: &Sender<EngineEvent>) {
                                     post_eq_to_webview();
                                     post_volume_to_webview();
                                     post_quality_to_webview();
-                                    let payload =
-                                        serde_json::json!({ "type": "fetch_playlists" }).to_string();
+                                    let payload = serde_json::json!({ "type": "fetch_playlists" })
+                                        .to_string();
                                     post_msg_to_webview(&payload);
                                     let _ = nav_tx.send(EngineEvent::Ready);
                                     Ok(())
@@ -986,9 +973,8 @@ fn start_webview_environment(hwnd: HWND, tx: &Sender<EngineEvent>) {
 fn init_hidden_webview(tx: Sender<EngineEvent>) {
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-        let _ = SetCurrentProcessExplicitAppUserModelID(&HSTRING::from(
-            "com.egehansimarikk.nocturne",
-        ));
+        let _ =
+            SetCurrentProcessExplicitAppUserModelID(&HSTRING::from("com.egehansimarikk.nocturne"));
     }
 
     let Some(hwnd) = ensure_host_window(&tx) else {
@@ -1126,11 +1112,7 @@ fn get_webview_data_dir() -> PathBuf {
     dir
 }
 
-fn build_bridge_script(
-    eq: EqState,
-    initial_volume: f32,
-    quality: StreamQualityState,
-) -> String {
+fn build_bridge_script(eq: EqState, initial_volume: f32, quality: StreamQualityState) -> String {
     let vol_str = format!("{:.3}", initial_volume.clamp(0.0, 1.0));
     bridge_script_template()
         .replace("__NOCTURNE_EQ_INIT__", &eq.init_json())

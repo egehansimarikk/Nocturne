@@ -19,6 +19,8 @@ Nocturne is a high-performance, audiophile-grade desktop client engineered from 
   * Supports **WASAPI Shared & Exclusive** output device selection with real-time sample rate / bit-depth diagnostics.
   * **10-Band Parametric/Graphic Equalizer** (`32 Hz` to `16 kHz`) with Preamp control, built-in audiophile curves (*Harman Over-Ear*, etc.), and custom user presets.
   * Hi-Fi FLAC / High Quality streaming selector and volume normalization.
+* **Synced Lyrics Panel:**
+  * Time-synced LRC and plain lyrics panel with real-time active line highlighting, manual refresh, and click-to-seek line jumping.
 * **DRM-Compliant Playback Bridge:** Direct native `webview2-com` integration supporting Widevine & PlayReady DRM without external browser bloat.
 * **Social & Scrobbling Integrations:**
   * **Discord Rich Presence:** Real-time track title, artist, album artwork, and elapsed/remaining time sync.
@@ -26,11 +28,14 @@ Nocturne is a high-performance, audiophile-grade desktop client engineered from 
 * **Full Library & Queue Management:**
   * Instant search with persistent search history, clipboard support (`Ctrl+V` / `Ctrl+C` / `Ctrl+X`), and paginated loading.
   * Access Liked Tracks, Artist Top Tracks, Album Views, and full User Playlist management (create, delete, add/remove tracks).
-  * Smart playback queue with shuffle, repeat modes (`Off` / `List` / `One`), and browser-style Back/Forward navigation.
-* **In-App Update Checker:** Automatic background update notifications and one-click download from GitHub Releases.
+  * Smart playback queue with shuffle, repeat modes (`Off` / `List` / `One`), and browser-style Back/Forward navigation (including mouse navigation buttons).
+* **In-App Update Checker:** Automatic background update notifications and one-click download from official GitHub Releases.
 * **Multi-Language Support:** Automatic system language detection with Turkish and English localization.
 
-### 🛠️ Personal Build Instructions (Windows)
+### 📦 Installation & Personal Build (Windows)
+
+* **Official Releases:** Pre-built Windows installers (`NocturneSetup-x.x.x-win-x64.exe`) are available exclusively on the official [GitHub Releases](https://github.com/egehansimarikk/nocturne/releases) page.
+* **Building From Source (Personal Use):**
 
 #### Prerequisites
 1. **Windows 10 / 11** (64-bit) with **Microsoft Edge WebView2 Runtime** installed (pre-installed on Windows 11).
@@ -51,7 +56,9 @@ The compiled executable will be located at `target/release/nocturne.exe` for you
 | Shortcut | Action |
 | :--- | :--- |
 | `Ctrl + F` | Focus search bar |
+| `Ctrl + L` | Toggle Lyrics panel |
 | `Ctrl + V` / `C` / `X` | Paste, copy, or cut in search / modal inputs |
+| `Ctrl + Backspace` | Delete previous word in search input |
 | `Space` | Play / Pause (when search is unfocused) |
 | `Ctrl + Left / Right` | Previous / Next track |
 | `Alt + Left / Right` | Navigate view history Back / Forward |
@@ -86,6 +93,8 @@ Nocturne, sıfırdan Rust ile mühendislik edilerek geliştirilmiş yüksek perf
   * Gerçek zamanlı örnekleme hızı (sample rate) ve bit derinliği (bit-depth) tanılaması ile **WASAPI Shared & Exclusive** çıkış aygıtı seçimi.
   * Ön yükselteç (Preamp) kontrolü, yerleşik odyofil eğrileri (*Harman Over-Ear* vb.) ve özel kullanıcı presetleri içeren **10-Bant Parametrik/Grafik Ekolayzer** (`32 Hz` – `16 kHz`).
   * Hi-Fi FLAC / Yüksek Kalite akış seçici ve ses seviyesi normalizasyonu.
+* **Senkronize Şarkı Sözleri Paneli:**
+  * Aktif satır vurgulaması, manuel yenileme ve satıra tıklayarak şarkıda o saniyeye atlama özellikli zaman senkronlu (LRC) / düz söz paneli.
 * **DRM Uyumlu Oynatma Köprüsü:** Harici tarayıcı şişkinliği olmadan Widevine ve PlayReady DRM destekleyen doğrudan yerel `webview2-com` entegrasyonu.
 * **Sosyal & Scrobbling Entegrasyonları:**
   * **Discord Rich Presence:** Gerçek zamanlı şarkı adı, sanatçı, albüm kapağı ve geçen/kalan süre senkronizasyonu.
@@ -93,11 +102,14 @@ Nocturne, sıfırdan Rust ile mühendislik edilerek geliştirilmiş yüksek perf
 * **Tam Kitaplık & Sıra Yönetimi:**
   * Kalıcı arama geçmişi, pano desteği (`Ctrl+V` / `Ctrl+C` / `Ctrl+X`) ve sayfalı yükleme ile anında arama.
   * Beğenilen Şarkılar, Sanatçının Popüler Parçaları, Albüm Görünümleri ve tam Çalma Listesi yönetimi (oluşturma, silme, şarkı ekleme/çıkarma).
-  * Karıştır (Shuffle), tekrar modları (`Kapalı` / `Liste` / `Tek`) ve tarayıcı tarzı İleri/Geri gezinme geçmişine sahip akıllı çalma sırası.
-* **Uygulama İçi Güncelleme Denetleyicisi:** Arka planda otomatik sürüm kontrolü ve GitHub Releases üzerinden tek tıkla güncelleme indirme.
+  * Karıştır (Shuffle), tekrar modları (`Kapalı` / `Liste` / `Tek`) ve fare yan tuşlarını da destekleyen tarayıcı tarzı İleri/Geri gezinme geçmişine sahip akıllı çalma sırası.
+* **Uygulama İçi Güncelleme Denetleyicisi:** Arka planda otomatik sürüm kontrolü ve resmi GitHub Releases üzerinden tek tıkla güncelleme indirme.
 * **Çoklu Dil Desteği:** Otomatik sistem dili algılama ile Türkçe ve İngilizce yerelleştirme.
 
-### 🛠️ Kişisel Derleme Talimatları (Windows)
+### 📦 Kurulum & Kişisel Derleme (Windows)
+
+* **Resmi Sürümler:** Hazır Windows kurulum sihirbazları (`NocturneSetup-x.x.x-win-x64.exe`) yalnızca resmi [GitHub Releases](https://github.com/egehansimarikk/nocturne/releases) sayfasında yayınlanmaktadır.
+* **Kaynak Koddan Derleme (Kişisel Kullanım):**
 
 #### Gereksinimler
 1. **Microsoft Edge WebView2 Runtime** yüklü **Windows 10 / 11** (64-bit) (Windows 11'de ön yüklü gelir).
@@ -118,7 +130,9 @@ Derlenen çalıştırılabilir dosya kişisel kullanımınız için `target/rele
 | Kısayol | İşlev |
 | :--- | :--- |
 | `Ctrl + F` | Arama çubuğuna odaklan |
+| `Ctrl + L` | Şarkı Sözleri panelini aç / kapat |
 | `Ctrl + V` / `C` / `X` | Arama veya pencere girişlerinde yapıştır, kopyala veya kes |
+| `Ctrl + Backspace` | Arama kutusunda önceki kelimeyi sil |
 | `Space` | Oynat / Duraklat (arama kutusu odakta değilken) |
 | `Ctrl + Sol / Sağ` | Önceki / Sonraki parça |
 | `Alt + Sol / Sağ` | Görünüm geçmişinde Geri / İleri git |

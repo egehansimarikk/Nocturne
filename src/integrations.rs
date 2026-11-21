@@ -10,18 +10,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 // ============================================================================
 // GÜVENLİ ANAHTAR YÖNETİMİ (Compile-time Env -> Yerel Override -> Gömülü Fallback)
 // ============================================================================
-// Açık kaynak repoda plain-text anahtar tutulmaz:
-// 1) Derleme zamanında `NOCTURNE_LASTFM_API_KEY` ve `NOCTURNE_LASTFM_SHARED_SECRET`
-//    ortam değişkenleri (veya GitHub Actions Secrets) varsa doğrudan gömülür.
-// 2) Geliştirme / yerel özelleştirme için `%LOCALAPPDATA%\Nocturne\credentials.json`
-//    dosyasından override edilebilir.
-// 3) Hiçbiri yoksa compile-time XOR maskeli varsayılan anahtarlar çözülür.
 
 const DISCORD_APP_ID: &str = "1573447652585119844";
 
 const CREDENTIAL_XOR_KEY: [u8; 8] = [0x4E, 0x6F, 0x63, 0x74, 0x75, 0x72, 0x6E, 0x65]; // "Nocturne"
 
-// Maskelenmiş varsayılan Last.fm anahtarları (plain-text sızıntısını önler)
 const MASKED_LASTFM_API_KEY: &[u8] = &[
     0x78, 0x0A, 0x01, 0x4C, 0x14, 0x10, 0x0C, 0x01, 0x7F, 0x58, 0x06, 0x45, 0x45, 0x42, 0x5B, 0x03,
     0x28, 0x5F, 0x56, 0x11, 0x45, 0x4B, 0x0A, 0x03, 0x2B, 0x5A, 0x06, 0x17, 0x13, 0x11, 0x5D, 0x06,
@@ -137,9 +130,9 @@ fn atomic_write_json(target: &PathBuf, json: &str) {
 #[cfg(windows)]
 fn dpapi_protect_string(plain: &str) -> Option<String> {
     use std::ffi::c_void;
-    use windows::core::PCSTR;
-    use windows::Win32::Foundation::{LocalFree, HLOCAL};
+    use windows::Win32::Foundation::{HLOCAL, LocalFree};
     use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
+    use windows::core::PCSTR;
 
     #[repr(C)]
     struct DataBlob {
@@ -175,7 +168,6 @@ fn dpapi_protect_string(plain: &str) -> Option<String> {
             pb_data: std::ptr::null_mut(),
         };
 
-        // CRYPTPROTECT_UI_FORBIDDEN = 0x1
         let ok = crypt_protect(
             &in_blob,
             std::ptr::null(),
@@ -202,9 +194,9 @@ fn dpapi_protect_string(plain: &str) -> Option<String> {
 #[cfg(windows)]
 fn dpapi_unprotect_string(hex_cipher: &str) -> Option<String> {
     use std::ffi::c_void;
-    use windows::core::PCSTR;
-    use windows::Win32::Foundation::{LocalFree, HLOCAL};
+    use windows::Win32::Foundation::{HLOCAL, LocalFree};
     use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
+    use windows::core::PCSTR;
 
     #[repr(C)]
     struct DataBlob {
@@ -247,7 +239,6 @@ fn dpapi_unprotect_string(hex_cipher: &str) -> Option<String> {
             pb_data: std::ptr::null_mut(),
         };
 
-        // CRYPTPROTECT_UI_FORBIDDEN = 0x1
         let ok = crypt_unprotect(
             &in_blob,
             std::ptr::null_mut(),
@@ -269,7 +260,7 @@ fn dpapi_unprotect_string(hex_cipher: &str) -> Option<String> {
 }
 
 // ============================================================================
-// DISCORD RICH PRESENCE (Sıfır Ekstra Crate - Doğrudan Windows Named Pipe IPC)
+// DISCORD RICH PRESENCE (Doğrudan Windows Named Pipe IPC)
 // ============================================================================
 
 struct DiscordRpcInner {
@@ -358,7 +349,6 @@ impl DiscordRpcManager {
         guard.pipe = connect_discord_ipc();
     }
 
-    /// EngineEvent::State(st) geldikçe çağrılır.
     pub fn on_playback_state(
         &self,
         track_id: u64,
@@ -427,12 +417,12 @@ impl DiscordRpcManager {
             serde_json::Value::Null
         };
 
-        let large_image = if artwork_url.starts_with("http://") || artwork_url.starts_with("https://")
-        {
-            artwork_url
-        } else {
-            "nocturne_logo"
-        };
+        let large_image =
+            if artwork_url.starts_with("http://") || artwork_url.starts_with("https://") {
+                artwork_url
+            } else {
+                "nocturne_logo"
+            };
 
         let small_image = if is_playing { "play" } else { "pause" };
         let small_text = if is_playing {
@@ -448,7 +438,7 @@ impl DiscordRpcManager {
         };
 
         let mut activity = serde_json::json!({
-            "type": 2, // Listening
+            "type": 2,
             "details": truncate_discord_field(title.trim(), 120),
             "state": truncate_discord_field(&artist_line, 120),
             "assets": {
@@ -586,13 +576,14 @@ fn read_discord_frame(pipe: &mut std::fs::File) -> std::io::Result<(u32, String)
 }
 
 // ============================================================================
-// LAST.FM SCROBBLING & OTURUM YÖNETİMİ (DPAPI Koruma + Offline Kuyruk + Temiz Metadata)
+// LAST.FM SCROBBLING & OTURUM YÖNETİMİ (Hızlı Pre-fetch + Otomatik Bağlantı)
 // ============================================================================
 
 const LASTFM_API_URL: &str = "https://ws.audioscrobbler.com/2.0/";
 const SCROBBLE_QUEUE_MAX_ITEMS: usize = 500;
-const SCROBBLE_BATCH_SIZE: usize = 50; // Last.fm API tek istekte max 50 scrobble destekler
-const SCROBBLE_MAX_AGE_SEC: u64 = 14 * 24 * 60 * 60; // Last.fm 14 günden eski scrobble'ları reddeder
+const SCROBBLE_BATCH_SIZE: usize = 50;
+const SCROBBLE_MAX_AGE_SEC: u64 = 14 * 24 * 60 * 60;
+const PREFETCHED_TOKEN_TTL: Duration = Duration::from_secs(45 * 60);
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LastFmSession {
@@ -665,7 +656,8 @@ struct LastFmInner {
     enabled: bool,
     session: Option<LastFmSession>,
     status: LastFmAuthStatus,
-    pending_token: Option<String>,
+    prefetched_token: Option<(String, Instant)>,
+    prefetch_in_flight: bool,
     tracker: Option<ScrobbleTracker>,
     offline_queue: VecDeque<PendingScrobbleItem>,
     flushing_queue: bool,
@@ -689,6 +681,10 @@ impl Default for LastFmManager {
 impl LastFmManager {
     pub fn new() -> Self {
         let saved = load_lastfm_session_from_disk();
+        let has_session = saved
+            .as_ref()
+            .map(|s| !s.session_key.is_empty())
+            .unwrap_or(false);
         let status = match &saved {
             Some(s) if !s.session_key.is_empty() => LastFmAuthStatus::LoggedIn {
                 username: s.username.clone(),
@@ -698,8 +694,11 @@ impl LastFmManager {
         let offline_queue = load_scrobble_queue_from_disk();
 
         let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .user_agent("Nocturne/0.2.0")
+            .connect_timeout(Duration::from_secs(3))
+            .timeout(Duration::from_secs(8))
+            .tcp_nodelay(true)
+            .pool_idle_timeout(Duration::from_secs(90))
+            .user_agent(format!("Nocturne/{}", env!("CARGO_PKG_VERSION")))
             .build()
             .unwrap_or_else(|_| reqwest::blocking::Client::new());
 
@@ -708,7 +707,8 @@ impl LastFmManager {
                 enabled: true,
                 session: saved,
                 status,
-                pending_token: None,
+                prefetched_token: None,
+                prefetch_in_flight: false,
                 tracker: None,
                 offline_queue,
                 flushing_queue: false,
@@ -719,9 +719,43 @@ impl LastFmManager {
             client,
         };
 
-        // Açılışta bekleyen offline scrobble varsa arka planda gönder
-        mgr.spawn_flush_offline_queue();
+        if has_session {
+            mgr.spawn_flush_offline_queue();
+        } else {
+            // Oturum yoksa token + TLS bağlantısını önceden ısıt
+            mgr.prefetch_auth_token();
+        }
         mgr
+    }
+
+    pub fn prefetch_auth_token(&self) {
+        let creds = resolved_credentials();
+        if creds.lastfm_api_key.trim().is_empty() || creds.lastfm_shared_secret.trim().is_empty() {
+            return;
+        }
+
+        {
+            let mut guard = self.inner.lock().unwrap();
+            if guard.session.is_some() || guard.prefetch_in_flight {
+                return;
+            }
+            if let Some((_, fetched_at)) = &guard.prefetched_token
+                && fetched_at.elapsed() < PREFETCHED_TOKEN_TTL
+            {
+                return;
+            }
+            guard.prefetch_in_flight = true;
+        }
+
+        let this = self.clone();
+        thread::spawn(move || {
+            let res = this.fetch_auth_token();
+            let mut guard = this.inner.lock().unwrap();
+            guard.prefetch_in_flight = false;
+            if let Ok(token) = res {
+                guard.prefetched_token = Some((token, Instant::now()));
+            }
+        });
     }
 
     pub fn set_enabled(&self, enabled: bool) {
@@ -764,17 +798,11 @@ impl LastFmManager {
         self.inner.lock().unwrap().last_scrobbled_track.clone()
     }
 
-    pub fn has_pending_auth(&self) -> bool {
-        let guard = self.inner.lock().unwrap();
-        matches!(guard.status, LastFmAuthStatus::WaitingForBrowserApproval)
-            || guard.pending_token.is_some()
-    }
-
     pub fn status_message(&self) -> Option<String> {
         let guard = self.inner.lock().unwrap();
         match &guard.status {
             LastFmAuthStatus::WaitingForBrowserApproval => Some(
-                "Tarayıcıda Last.fm erişimine izin ver; onayladıktan sonra otomatik bağlanır."
+                "Tarayıcıda Last.fm erişimine izin ver; onayladığında otomatik bağlanır."
                     .to_string(),
             ),
             LastFmAuthStatus::Error(err) => Some(err.clone()),
@@ -790,37 +818,7 @@ impl LastFmManager {
         self.start_login();
     }
 
-    pub fn complete_auth(&self) {
-        let token = {
-            let guard = self.inner.lock().unwrap();
-            guard.pending_token.clone()
-        };
-        let Some(token) = token else {
-            return;
-        };
-
-        let this = self.clone();
-        thread::spawn(move || match this.exchange_token_for_session(&token) {
-            Ok(session) => {
-                save_lastfm_session_to_disk(&session);
-                {
-                    let mut guard = this.inner.lock().unwrap();
-                    guard.status = LastFmAuthStatus::LoggedIn {
-                        username: session.username.clone(),
-                    };
-                    guard.session = Some(session);
-                    guard.pending_token = None;
-                }
-                this.spawn_flush_offline_queue();
-            }
-            Err(err) => {
-                let mut guard = this.inner.lock().unwrap();
-                guard.status = LastFmAuthStatus::Error(err);
-            }
-        });
-    }
-
-    /// Kullanıcının tarayıcısında Last.fm onay sayfasını açar ve arka planda oturumu bekler.
+    /// Kullanıcının tarayıcısında Last.fm onay sayfasını anında açar ve arka planda otomatik bağlar.
     pub fn start_login(&self) {
         let creds = resolved_credentials();
         if creds.lastfm_api_key.trim().is_empty() || creds.lastfm_shared_secret.trim().is_empty() {
@@ -831,29 +829,31 @@ impl LastFmManager {
             return;
         }
 
-        {
+        let ready_token = {
             let mut guard = self.inner.lock().unwrap();
             if matches!(guard.status, LastFmAuthStatus::WaitingForBrowserApproval) {
                 return;
             }
             guard.status = LastFmAuthStatus::WaitingForBrowserApproval;
-            guard.pending_token = None;
-        }
+            guard
+                .prefetched_token
+                .take()
+                .filter(|(_, fetched_at)| fetched_at.elapsed() < PREFETCHED_TOKEN_TTL)
+                .map(|(tok, _)| tok)
+        };
 
         let this = self.clone();
         thread::spawn(move || {
-            let token = match this.fetch_auth_token() {
-                Ok(t) => t,
-                Err(e) => {
-                    this.inner.lock().unwrap().status = LastFmAuthStatus::Error(e);
-                    return;
-                }
+            let token = match ready_token {
+                Some(t) => t,
+                None => match this.fetch_auth_token() {
+                    Ok(t) => t,
+                    Err(e) => {
+                        this.inner.lock().unwrap().status = LastFmAuthStatus::Error(e);
+                        return;
+                    }
+                },
             };
-
-            {
-                let mut guard = this.inner.lock().unwrap();
-                guard.pending_token = Some(token.clone());
-            }
 
             let auth_url = format!(
                 "https://www.last.fm/api/auth/?api_key={}&token={}",
@@ -868,8 +868,15 @@ impl LastFmManager {
                 return;
             }
 
-            for _ in 0..36 {
-                thread::sleep(Duration::from_millis(2500));
+            // İlk 20 denemede 800 ms aralıkla hızlı kontrol, sonrasında 2 sn aralık
+            for attempt in 0..55 {
+                let wait = if attempt < 20 {
+                    Duration::from_millis(800)
+                } else {
+                    Duration::from_secs(2)
+                };
+                thread::sleep(wait);
+
                 if !matches!(
                     this.inner.lock().unwrap().status,
                     LastFmAuthStatus::WaitingForBrowserApproval
@@ -885,7 +892,6 @@ impl LastFmManager {
                             username: session.username.clone(),
                         };
                         guard.session = Some(session);
-                        guard.pending_token = None;
                     }
                     this.spawn_flush_offline_queue();
                     return;
@@ -897,16 +903,21 @@ impl LastFmManager {
                 guard.status =
                     LastFmAuthStatus::Error("Giriş zaman aşımına uğradı, tekrar dene.".into());
             }
+            drop(guard);
+            this.prefetch_auth_token();
         });
     }
 
     pub fn logout(&self) {
         delete_lastfm_session_from_disk();
-        let mut guard = self.inner.lock().unwrap();
-        guard.session = None;
-        guard.tracker = None;
-        guard.pending_token = None;
-        guard.status = LastFmAuthStatus::LoggedOut;
+        {
+            let mut guard = self.inner.lock().unwrap();
+            guard.session = None;
+            guard.tracker = None;
+            guard.prefetched_token = None;
+            guard.status = LastFmAuthStatus::LoggedOut;
+        }
+        self.prefetch_auth_token();
     }
 
     pub fn on_playback_state(
@@ -941,9 +952,7 @@ impl LastFmManager {
     ) {
         let clean_title = clean_metadata_title(title);
         let clean_artist = clean_metadata_artist(artist);
-        let clean_album = album
-            .map(clean_metadata_title)
-            .filter(|a| !a.is_empty());
+        let clean_album = album.map(clean_metadata_title).filter(|a| !a.is_empty());
 
         if pending_switch || track_id == 0 || clean_title.is_empty() || clean_artist.is_empty() {
             return;
@@ -1083,7 +1092,7 @@ impl LastFmManager {
         let mut last_error = String::new();
         let mut json = serde_json::Value::Null;
 
-        for attempt in 0..3 {
+        for attempt in 0..2 {
             match self.client.get(&url).send() {
                 Ok(resp) => match resp.json() {
                     Ok(parsed) => {
@@ -1096,8 +1105,8 @@ impl LastFmManager {
                 Err(e) => last_error = format!("Bağlantı hatası: {e}"),
             }
 
-            if attempt < 2 {
-                thread::sleep(Duration::from_millis(500));
+            if attempt == 0 {
+                thread::sleep(Duration::from_millis(250));
             }
         }
 
@@ -1133,9 +1142,7 @@ impl LastFmManager {
             .get(&url)
             .send()
             .map_err(|e| format!("Bağlantı hatası: {e}"))?;
-        let json: serde_json::Value = resp
-            .json()
-            .map_err(|e| format!("Geçersiz yanıt: {e}"))?;
+        let json: serde_json::Value = resp.json().map_err(|e| format!("Geçersiz yanıt: {e}"))?;
 
         let sess = json
             .get("session")
@@ -1162,10 +1169,6 @@ impl LastFmManager {
         })
     }
 
-    /// API yanıtını analiz eder:
-    /// - `Ok(true)`: İşlem başarılı
-    /// - `Ok(false)`: Kalıcı hata (oturum geçersiz veya parametre hatalı -> kuyruğa alma)
-    /// - `Err(())`: Geçici ağ / sunucu hatası (5xx, timeout, rate limit -> kuyrukta tut)
     fn classify_api_response(
         &self,
         resp: Result<reqwest::blocking::Response, reqwest::Error>,
@@ -1191,10 +1194,8 @@ impl LastFmManager {
                 .unwrap_or("Bilinmeyen Last.fm hatası");
 
             match code {
-                // Geçici Last.fm servis hataları (11: Service Offline, 16: Temporarily Unavailable, 29: Rate limit)
                 11 | 16 | 29 => return Err(()),
                 9 => {
-                    // Invalid session key -> oturumu sıfırla
                     delete_lastfm_session_from_disk();
                     let mut guard = self.inner.lock().unwrap();
                     guard.session = None;
@@ -1212,7 +1213,6 @@ impl LastFmManager {
             }
         }
 
-        // Başarılı yanıt sonrasında varsa önceki geçici hatayı temizle
         {
             let mut guard = self.inner.lock().unwrap();
             if matches!(guard.status, LastFmAuthStatus::Error(_))
@@ -1302,9 +1302,7 @@ impl LastFmManager {
                 }
                 self.spawn_flush_offline_queue();
             }
-            Ok(false) => {
-                // Oturum geçersiz veya kalıcı API reddi: kuyruğa ekleme
-            }
+            Ok(false) => {}
             Err(()) => {
                 self.enqueue_offline_scrobble(item);
             }
@@ -1339,7 +1337,6 @@ impl LastFmManager {
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
 
-            // 14 günden eski scrobble'ları temizle
             guard
                 .offline_queue
                 .retain(|it| now_sec.saturating_sub(it.timestamp) <= SCROBBLE_MAX_AGE_SEC);
@@ -1355,8 +1352,12 @@ impl LastFmManager {
             guard.last_flush_attempt = Some(Instant::now());
 
             let take_count = guard.offline_queue.len().min(SCROBBLE_BATCH_SIZE);
-            let batch: Vec<PendingScrobbleItem> =
-                guard.offline_queue.iter().take(take_count).cloned().collect();
+            let batch: Vec<PendingScrobbleItem> = guard
+                .offline_queue
+                .iter()
+                .take(take_count)
+                .cloned()
+                .collect();
             (session_key, batch)
         };
 
@@ -1424,8 +1425,6 @@ impl LastFmManager {
     }
 }
 
-/// Deezer parça adlarındaki gereksiz sürüm/etiket takılarını temizler
-/// (ör. "(Remastered 2011)", "[Explicit]", "- Radio Edit").
 fn clean_metadata_title(raw: &str) -> String {
     let mut s = raw.trim().to_string();
     let noisy_tags = [
@@ -1455,7 +1454,6 @@ fn clean_metadata_title(raw: &str) -> String {
     s.trim_end_matches(['-', ' ']).trim().to_string()
 }
 
-/// Çoklu sanatçı listelerinde Last.fm eşleşmesini iyileştirmek için ana sanatçıyı alır.
 fn clean_metadata_artist(raw: &str) -> String {
     let trimmed = raw.trim();
     if let Some((first, _)) = trimmed.split_once(", ") {
@@ -1527,7 +1525,6 @@ fn load_lastfm_session_from_disk() -> Option<LastFmSession> {
         return None;
     }
 
-    // Eski düz metin oturumu tespit edilirse otomatik olarak DPAPI korumalı formata geçir
     #[cfg(windows)]
     save_lastfm_session_to_disk(&parsed);
 
@@ -1543,7 +1540,7 @@ fn save_lastfm_session_to_disk(session: &LastFmSession) {
     let stored = if let Some(cipher) = dpapi_protect_string(&session.session_key) {
         LastFmSession {
             username: session.username.clone(),
-            session_key: String::new(), // Disk üzerinde düz metin bırakma
+            session_key: String::new(),
             encrypted_session_key: Some(cipher),
         }
     } else {
@@ -1591,9 +1588,9 @@ fn open_url_in_default_browser(url: &str) -> bool {
     #[cfg(target_os = "windows")]
     {
         use widestring::U16CString;
-        use windows::core::PCWSTR;
         use windows::Win32::UI::Shell::ShellExecuteW;
         use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        use windows::core::PCWSTR;
 
         let Ok(operation) = U16CString::from_str("open") else {
             return false;
@@ -1623,7 +1620,6 @@ fn open_url_in_default_browser(url: &str) -> bool {
     }
 }
 
-/// Saf Rust RFC 1321 MD5 (Harici crate gerektirmez)
 fn md5_hex(input: &[u8]) -> String {
     const S: [u32; 64] = [
         7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5,
@@ -1692,8 +1688,9 @@ fn md5_hex(input: &[u8]) -> String {
     }
     out
 }
+
 // ============================================================================
-// GITHUB OTOMATİK GÜNCELLEME DENETLEYİCİSİ (Sıfır Ekstra Crate - Reqwest + Rustls)
+// GITHUB OTOMATİK GÜNCELLEME DENETLEYİCİSİ
 // ============================================================================
 
 const GITHUB_LATEST_RELEASE_API: &str =
@@ -1737,6 +1734,7 @@ impl UpdateChecker {
     pub fn new() -> Self {
         let user_agent = format!("Nocturne/{}", env!("CARGO_PKG_VERSION"));
         let client = reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_secs(4))
             .timeout(Duration::from_secs(10))
             .user_agent(user_agent)
             .build()
@@ -1765,7 +1763,6 @@ impl UpdateChecker {
         }
     }
 
-    /// Açılışta soğuk başlatma hızını etkilememek için gecikmeli arka plan kontrolü başlatır.
     pub fn check_in_background(&self, delay: Duration) {
         {
             let mut guard = self.inner.lock().unwrap();
@@ -1786,12 +1783,10 @@ impl UpdateChecker {
         });
     }
 
-    /// Ayarlar menüsünden "Güncellemeleri Denetle" butonuna basıldığında anında çalışır.
     pub fn check_now(&self) {
         self.check_in_background(Duration::ZERO);
     }
 
-    /// Mevcut güncelleme varsa doğrudan kurulum dosyasını (veya sürüm sayfasını) tarayıcıda açar.
     pub fn open_update_download(&self) -> bool {
         let target_url = match &self.inner.lock().unwrap().state {
             UpdateCheckState::Available(info) => info.download_url.clone(),
@@ -1813,7 +1808,6 @@ impl UpdateChecker {
 
         let status = resp.status().as_u16();
         if status == 404 {
-            // Henüz yayınlanmış bir Release yoksa sessizce güncel say
             return UpdateCheckState::UpToDate;
         }
         if status >= 400 {
@@ -1853,7 +1847,8 @@ impl UpdateChecker {
             .trim()
             .to_string();
 
-        let download_url = select_windows_installer_asset(&json).unwrap_or_else(|| release_url.clone());
+        let download_url =
+            select_windows_installer_asset(&json).unwrap_or_else(|| release_url.clone());
 
         UpdateCheckState::Available(ReleaseUpdateInfo {
             latest_version: tag_name.trim_start_matches(['v', 'V']).to_string(),

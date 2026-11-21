@@ -4,23 +4,25 @@ mod audio_engine;
 mod i18n;
 mod icons;
 mod integrations;
+mod lyrics;
 mod settings_modal;
 mod theme;
 mod webview_bridge;
 
 use audio_engine::{AudioDiagnostics, AudioEngine, AudioOutputDevice, OutputShareMode};
 use gpui::{
-    div, img, prelude::*, px, rgb, rgba, size, App, Bounds, Context, ElementId, FocusHandle,
-    Focusable, InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, NavigationDirection, ParentElement, Render, Rgba, SharedString, Styled,
-    TitlebarOptions, Window, WindowBounds, WindowOptions,
+    App, Bounds, Context, ElementId, FocusHandle, Focusable, InteractiveElement, IntoElement,
+    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, NavigationDirection, ParentElement,
+    Pixels, Render, Rgba, SharedString, Styled, TitlebarOptions, Window, WindowBounds,
+    WindowOptions, div, img, point, prelude::*, px, rgb, rgba, size,
 };
-use i18n::{text, LanguageSetting};
-use icons::{lucide_icon, NocturneAssets};
+use i18n::{LanguageSetting, text};
+use icons::{NocturneAssets, lucide_icon};
 use integrations::{DiscordRpcManager, LastFmManager, UpdateChecker};
+use lyrics::{LyricsManager, LyricsState, LyricsTranslationSnapshot, active_line_index};
 use serde::{Deserialize, Serialize};
 use settings_modal::SettingsTab;
-use std::collections::{hash_map::DefaultHasher, HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque, hash_map::DefaultHasher};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -91,6 +93,16 @@ struct AppConfig {
     discord_rpc_enabled: bool,
     #[serde(default = "default_true")]
     lastfm_enabled: bool,
+    #[serde(default)]
+    window_width: Option<f32>,
+    #[serde(default)]
+    window_height: Option<f32>,
+    #[serde(default)]
+    window_x: Option<f32>,
+    #[serde(default)]
+    window_y: Option<f32>,
+    #[serde(default)]
+    window_maximized: bool,
 }
 
 impl Default for AppConfig {
@@ -109,6 +121,11 @@ impl Default for AppConfig {
             normalize_volume: false,
             discord_rpc_enabled: true,
             lastfm_enabled: true,
+            window_width: None,
+            window_height: None,
+            window_x: None,
+            window_y: None,
+            window_maximized: false,
         }
     }
 }
@@ -121,7 +138,7 @@ impl AppConfig {
     fn load() -> Self {
         let path = Self::path();
         if let Ok(raw) = fs::read_to_string(path)
-            && let Ok(cfg) = serde_json::from_str::<AppConfig>(&raw)
+            && let Ok(cfg) = serde_json::from_str::<Self>(&raw)
         {
             return cfg;
         }
@@ -441,11 +458,17 @@ pub enum BgTaskResult {
 
 pub struct NocturneApp {
     pub focus_handle: FocusHandle,
+    last_window_bounds: Option<Bounds<Pixels>>,
+    last_window_maximized: bool,
     pub engine: DeezerEngine,
     pub audio: AudioEngine,
     pub discord_rpc: DiscordRpcManager,
     pub lastfm: LastFmManager,
+    pub lyrics: LyricsManager,
     pub updater: UpdateChecker,
+    pub lyrics_scroll_handle: gpui::ScrollHandle,
+    pub track_list_scroll_handle: gpui::ScrollHandle,
+    pub last_scrolled_lyric_idx: Option<usize>,
     pub state: PlaybackState,
     pub bg_tx: Sender<BgTaskResult>,
     pub bg_rx: Receiver<BgTaskResult>,
@@ -487,13 +510,15 @@ pub struct NocturneApp {
     pub thumb_cache: HashMap<String, PathBuf>,
     thumb_requested: HashSet<String>,
 
-    // Akıllı Sıra (Queue) & Otomatik Geçiş
+    // Akıllı Sıra (Queue) & Otomatik Geçiş & Şarkı Sözleri
     pub queue: Vec<DeezerTrackItem>,
     pub queue_index: Option<usize>,
     pub target_track_id: u64,
     pub shuffle_enabled: bool,
     pub repeat_mode: RepeatMode,
     pub queue_drawer_open: bool,
+    pub lyrics_drawer_open: bool,
+    pub lyrics_translation_enabled: bool,
     pub last_track_advance: Instant,
     pub last_seek_at: Instant,
     pub startup_refresh_at: Option<Instant>,
@@ -529,7 +554,11 @@ pub struct NocturneApp {
 }
 
 impl NocturneApp {
-    fn new(cx: &mut Context<Self>) -> Self {
+    fn new(
+        cx: &mut Context<Self>,
+        initial_window_bounds: Bounds<Pixels>,
+        initial_window_maximized: bool,
+    ) -> Self {
         let cfg = AppConfig::load();
         let initial_mode = OutputShareMode::Shared;
         let init_preamp = clamp_preamp_db(cfg.eq_preamp_db);
@@ -555,6 +584,7 @@ impl NocturneApp {
         let discord_rpc = DiscordRpcManager::new(cfg.discord_rpc_enabled);
         let lastfm = LastFmManager::new();
         lastfm.set_enabled(cfg.lastfm_enabled);
+        let lyrics = LyricsManager::new();
         let updater = UpdateChecker::new();
         updater.check_in_background(Duration::from_secs(3));
 
@@ -596,11 +626,11 @@ impl NocturneApp {
                                 };
 
                                 if !st.pending_switch && matches_target {
-                                    let track_changed = st.track_id > 0
-                                        && st.track_id != app.state.track_id;
-                                    let started_playing =
-                                        st.is_playing && !app.state.is_playing;
+                                    let track_changed =
+                                        st.track_id > 0 && st.track_id != app.state.track_id;
+                                    let started_playing = st.is_playing && !app.state.is_playing;
                                     if track_changed {
+                                        app.last_scrolled_lyric_idx = None;
                                         app.cached_artwork_url.clear();
                                         app.cached_artwork_path = None;
                                         app.cover_ambient_rgb = None;
@@ -647,14 +677,25 @@ impl NocturneApp {
 
                                     if track_changed || started_playing {
                                         app.sync_eq_live();
-                                        app.engine
-                                            .set_volume(if app.muted { 0.0 } else { app.volume });
+                                        app.engine.set_volume(if app.muted {
+                                            0.0
+                                        } else {
+                                            app.volume
+                                        });
                                         app.engine.send_command("eq_now");
                                         app.audio.notify_playback_started();
                                         app.pending_eq_reapply_until =
                                             Some(Instant::now() + Duration::from_secs(4));
                                     }
                                     app.state.is_playing = st.is_playing;
+
+                                    if !app.state.title.is_empty() && !app.state.artist.is_empty() {
+                                        app.lyrics.fetch_for_track(
+                                            &app.state.title,
+                                            &app.state.artist,
+                                            app.state.duration,
+                                        );
+                                    }
 
                                     // Discord Rich Presence & Last.fm Scrobbling senkronizasyonu
                                     let active_artwork = if !st.artwork.is_empty() {
@@ -799,10 +840,9 @@ impl NocturneApp {
                                                 app.language,
                                                 "Şarkı çalma listesinden çıkarıldı.",
                                             ),
-                                            _ => text(
-                                                app.language,
-                                                "Şarkı çalma listesine eklendi.",
-                                            ),
+                                            _ => {
+                                                text(app.language, "Şarkı çalma listesine eklendi.")
+                                            }
                                         }
                                     } else {
                                         let localized_err = text(app.language, &message);
@@ -817,7 +857,8 @@ impl NocturneApp {
                             EngineEvent::Ready => {
                                 app.engine.refresh_playlists();
                                 app.sync_eq_live();
-                                app.engine.set_volume(if app.muted { 0.0 } else { app.volume });
+                                app.engine
+                                    .set_volume(if app.muted { 0.0 } else { app.volume });
                                 app.engine
                                     .set_audio_quality(app.audio_quality, app.normalize_volume);
                                 app.startup_refresh_stage = 0;
@@ -903,8 +944,7 @@ impl NocturneApp {
                         if (session_ready && playlists_ready) || attempts_exhausted {
                             app.startup_refresh_at = None;
                         } else {
-                            app.startup_refresh_stage =
-                                app.startup_refresh_stage.saturating_add(1);
+                            app.startup_refresh_stage = app.startup_refresh_stage.saturating_add(1);
                             let delay_ms = if session_ready {
                                 2500
                             } else if app.startup_refresh_stage <= 8 {
@@ -935,6 +975,7 @@ impl NocturneApp {
                     }
                     app.audio_diag = audio_diag;
                     app.share_mode = app.audio_diag.active_mode;
+                    app.ensure_lyrics_translation();
 
                     cx.notify();
                 });
@@ -948,11 +989,17 @@ impl NocturneApp {
 
         Self {
             focus_handle: cx.focus_handle(),
+            last_window_bounds: Some(initial_window_bounds),
+            last_window_maximized: initial_window_maximized,
             engine,
             audio,
             discord_rpc,
             lastfm,
+            lyrics,
             updater,
+            lyrics_scroll_handle: gpui::ScrollHandle::new(),
+            track_list_scroll_handle: gpui::ScrollHandle::new(),
+            last_scrolled_lyric_idx: None,
             state: PlaybackState::default(),
             bg_tx,
             bg_rx,
@@ -991,6 +1038,8 @@ impl NocturneApp {
             shuffle_enabled: false,
             repeat_mode: RepeatMode::All,
             queue_drawer_open: false,
+            lyrics_drawer_open: false,
+            lyrics_translation_enabled: false,
             last_track_advance: Instant::now() - Duration::from_secs(10),
             last_seek_at: Instant::now() - Duration::from_secs(10),
             startup_refresh_at: Some(Instant::now() + Duration::from_millis(350)),
@@ -1087,6 +1136,8 @@ impl NocturneApp {
         self.search_focused = false;
         self.loading_more = false;
         self.next_page_url = None;
+        self.track_list_scroll_handle
+            .set_offset(gpui::point(gpui::px(0.0), gpui::px(0.0)));
 
         if record {
             self.push_route(route.clone());
@@ -1181,8 +1232,33 @@ impl NocturneApp {
             normalize_volume: self.normalize_volume,
             discord_rpc_enabled: self.discord_rpc.is_enabled(),
             lastfm_enabled: self.lastfm.is_enabled(),
+            window_width: self
+                .last_window_bounds
+                .map(|bounds| bounds.size.width.as_f32()),
+            window_height: self
+                .last_window_bounds
+                .map(|bounds| bounds.size.height.as_f32()),
+            window_x: self
+                .last_window_bounds
+                .map(|bounds| bounds.origin.x.as_f32()),
+            window_y: self
+                .last_window_bounds
+                .map(|bounds| bounds.origin.y.as_f32()),
+            window_maximized: self.last_window_maximized,
         };
         cfg.save();
+    }
+
+    fn update_window_state(&mut self, window: &Window) {
+        let bounds = window.bounds();
+        if bounds.size.width <= px(0.0) || bounds.size.height <= px(0.0) {
+            return;
+        }
+
+        self.last_window_maximized = window.is_maximized();
+        if !self.last_window_maximized {
+            self.last_window_bounds = Some(bounds);
+        }
     }
 
     pub fn sync_eq(&mut self) {
@@ -1322,6 +1398,32 @@ impl NocturneApp {
         }
     }
 
+    fn ensure_lyrics_translation(&self) {
+        if !self.lyrics_translation_enabled {
+            return;
+        }
+
+        let LyricsState::Loaded(track) = self.lyrics.snapshot() else {
+            return;
+        };
+        if track.instrumental {
+            return;
+        }
+
+        let source_lines: Vec<String> = if !track.synced.is_empty() {
+            track.synced.iter().map(|line| line.text.clone()).collect()
+        } else {
+            track
+                .plain
+                .as_deref()
+                .map(|plain| plain.lines().map(str::to_string).collect())
+                .unwrap_or_default()
+        };
+        let _ = self
+            .lyrics
+            .translate_lines(&source_lines, self.language.translation_code());
+    }
+
     fn extract_dominant_color(path: &Path) -> Option<u32> {
         let img = image::open(path).ok()?.thumbnail(32, 32).to_rgb8();
         let mut r_sum = 0u64;
@@ -1446,11 +1548,17 @@ impl NocturneApp {
     fn spawn_loved_track_ids(user_id: u64, tx: Sender<BgTaskResult>) {
         thread::spawn(move || {
             let client = reqwest::blocking::Client::new();
-            let mut next = Some(format!("https://api.deezer.com/user/{user_id}/tracks?limit=100"));
+            let mut next = Some(format!(
+                "https://api.deezer.com/user/{user_id}/tracks?limit=100"
+            ));
             let mut ids = HashSet::new();
             while let Some(url) = next.take() {
-                let Ok(response) = client.get(url).send() else { break };
-                let Ok(page) = response.json::<DeezerSearchResponse>() else { break };
+                let Ok(response) = client.get(url).send() else {
+                    break;
+                };
+                let Ok(page) = response.json::<DeezerSearchResponse>() else {
+                    break;
+                };
                 ids.extend(page.data.into_iter().map(|track| track.id));
                 next = page.next;
                 if ids.len() >= 10_000 {
@@ -1587,7 +1695,10 @@ impl NocturneApp {
         self.search_focused = false;
         if self.deezer_user_id.is_none() {
             self.action_notice = Some((
-                text(self.language, "Beğenilenlere eklemek için önce Deezer oturumu aç."),
+                text(
+                    self.language,
+                    "Beğenilenlere eklemek için önce Deezer oturumu aç.",
+                ),
                 Instant::now(),
             ));
             if !self.login_window_open {
@@ -1609,7 +1720,10 @@ impl NocturneApp {
         };
         if self.deezer_user_id.is_none() {
             self.action_notice = Some((
-                text(self.language, "Çalma listesine eklemek için önce Deezer oturumu aç."),
+                text(
+                    self.language,
+                    "Çalma listesine eklemek için önce Deezer oturumu aç.",
+                ),
                 Instant::now(),
             ));
             if !self.login_window_open {
@@ -1617,14 +1731,18 @@ impl NocturneApp {
             }
             return;
         }
-        self.engine.remove_track_from_playlist(track_id, playlist_id);
+        self.engine
+            .remove_track_from_playlist(track_id, playlist_id);
     }
 
     fn open_track_playlist_picker(&mut self, track_id: u64) {
         self.search_focused = false;
         if self.deezer_user_id.is_none() {
             self.action_notice = Some((
-                text(self.language, "Çalma listesine eklemek için önce Deezer oturumu aç."),
+                text(
+                    self.language,
+                    "Çalma listesine eklemek için önce Deezer oturumu aç.",
+                ),
                 Instant::now(),
             ));
             if !self.login_window_open {
@@ -1710,8 +1828,7 @@ impl NocturneApp {
         self.new_playlist_open = true;
         self.search_focused = false;
         if self.new_playlist_error.is_none() {
-            self.new_playlist_error =
-                Some(text(self.language, "Çalma listesi oluşturulamadı."));
+            self.new_playlist_error = Some(text(self.language, "Çalma listesi oluşturulamadı."));
         }
     }
 
@@ -1814,6 +1931,7 @@ impl NocturneApp {
                             .child(
                                 div()
                                     .id("close-new-playlist")
+                                    .flex()
                                     .px(px(8.0))
                                     .py(px(4.0))
                                     .rounded(px(5.0))
@@ -1869,7 +1987,10 @@ impl NocturneApp {
                             .text_size(px(10.5))
                             .text_color(rgb(pal.text_muted))
                             .child(if with_track {
-                                text(language, "Liste oluşturulunca çalan şarkı eklenecek. Enter ile onayla, Esc ile kapat.")
+                                text(
+                                    language,
+                                    "Liste oluşturulunca çalan şarkı eklenecek. Enter ile onayla, Esc ile kapat.",
+                                )
                             } else {
                                 text(language, "Enter ile oluştur, Esc ile kapat.")
                             }),
@@ -2097,6 +2218,7 @@ impl NocturneApp {
     }
 
     fn select_track_optimistic(&mut self, track: &DeezerTrackItem) {
+        self.last_scrolled_lyric_idx = None;
         self.target_track_id = track.id;
         self.state.track_id = track.id;
         self.state.title = track.title.clone();
@@ -2107,6 +2229,9 @@ impl NocturneApp {
         self.last_track_advance = Instant::now();
         self.last_seek_at = Instant::now();
         self.audio.notify_playback_started();
+
+        self.lyrics
+            .fetch_for_track(&track.title, &track.artist.name, track.duration as f64);
 
         if !track.album.cover_medium.is_empty() {
             if track.album.cover_medium != self.cached_artwork_url {
@@ -2332,7 +2457,13 @@ impl NocturneApp {
                 {
                     let cleaned: String = text
                         .chars()
-                        .map(|c| if matches!(c, '\r' | '\n' | '\t') { ' ' } else { c })
+                        .map(|c| {
+                            if matches!(c, '\r' | '\n' | '\t') {
+                                ' '
+                            } else {
+                                c
+                            }
+                        })
                         .collect();
                     let cleaned = cleaned.trim();
                     if !cleaned.is_empty() {
@@ -2404,6 +2535,16 @@ impl NocturneApp {
             return;
         }
 
+        if modifiers.control && key == "l" {
+            self.search_focused = false;
+            self.lyrics_drawer_open = !self.lyrics_drawer_open;
+            if self.lyrics_drawer_open {
+                self.queue_drawer_open = false;
+            }
+            cx.notify();
+            return;
+        }
+
         if modifiers.control && matches!(key, "left" | "arrowleft") {
             self.play_prev();
             cx.notify();
@@ -2422,7 +2563,13 @@ impl NocturneApp {
                 {
                     let cleaned: String = text
                         .chars()
-                        .map(|c| if matches!(c, '\r' | '\n' | '\t') { ' ' } else { c })
+                        .map(|c| {
+                            if matches!(c, '\r' | '\n' | '\t') {
+                                ' '
+                            } else {
+                                c
+                            }
+                        })
                         .collect();
                     let cleaned = cleaned.trim();
                     if !cleaned.is_empty() {
@@ -2551,6 +2698,7 @@ impl Focusable for NocturneApp {
 
 impl Render for NocturneApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.update_window_state(window);
         let pal = self.theme_id.palette();
         let ambient_hex = self.cover_ambient_rgb.unwrap_or(pal.accent);
         let can_back = self.can_navigate_back();
@@ -2918,6 +3066,35 @@ impl Render for NocturneApp {
                             )
                             .child(
                                 div()
+                                    .id("toggle-lyrics-drawer")
+                                    .px(px(10.0))
+                                    .py(px(5.0))
+                                    .rounded(px(6.0))
+                                    .bg(if self.lyrics_drawer_open {
+                                        rgb(pal.accent)
+                                    } else {
+                                        rgb(pal.bg_chip)
+                                    })
+                                    .hover(|s| s.bg(rgb(pal.bg_chip_hover)))
+                                    .cursor_pointer()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(5.0))
+                                    .text_size(px(11.5))
+                                    .text_color(rgb(pal.text_primary))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.search_focused = false;
+                                        this.lyrics_drawer_open = !this.lyrics_drawer_open;
+                                        if this.lyrics_drawer_open {
+                                            this.queue_drawer_open = false;
+                                        }
+                                        cx.notify();
+                                    }))
+                                    .child(lucide_icon("music", 13.5, rgb(pal.text_primary)))
+                                    .child(text(self.language, "Sözler")),
+                            )
+                            .child(
+                                div()
                                     .id("toggle-queue-drawer")
                                     .px(px(10.0))
                                     .py(px(5.0))
@@ -2937,6 +3114,9 @@ impl Render for NocturneApp {
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.search_focused = false;
                                         this.queue_drawer_open = !this.queue_drawer_open;
+                                        if this.queue_drawer_open {
+                                            this.lyrics_drawer_open = false;
+                                        }
                                         cx.notify();
                                     }))
                                     .child(lucide_icon("list-music", 13.5, rgb(pal.text_primary)))
@@ -3188,6 +3368,7 @@ impl Render for NocturneApp {
                                             .child(
                                                 div()
                                                     .id("new-playlist-btn")
+                                                    .flex()
                                                     .px(px(6.0))
                                                     .py(px(2.5))
                                                     .rounded(px(4.0))
@@ -3432,6 +3613,7 @@ impl Render for NocturneApp {
                                     .flex_col()
                                     .gap(px(5.0))
                                     .overflow_y_scroll()
+                                    .track_scroll(&self.track_list_scroll_handle)
                                     .children(self.tracks.iter().enumerate().map(
                                         |(idx, track)| {
                                             let track_id = track.id;
@@ -3760,7 +3942,7 @@ impl Render for NocturneApp {
                                     }),
                             ),
                     )
-                    // SAĞ PANEL: ALBÜM KAPAĞI VEYA AKTİF ÇALMA SIRASI (QUEUE)
+                    // SAĞ PANEL: ALBÜM KAPAĞI, ŞARKI SÖZLERİ VEYA ÇALMA SIRASI
                     .child(
                         div()
                             .w(px(285.0))
@@ -3770,7 +3952,459 @@ impl Render for NocturneApp {
                             .border_color(rgb(pal.border_subtle))
                             .flex()
                             .flex_col()
-                            .when(self.queue_drawer_open, |panel| {
+                            .when(self.lyrics_drawer_open, |panel| {
+                                let lyrics_snapshot = self.lyrics.snapshot();
+                                let lyrics_translation = if self.lyrics_translation_enabled {
+                                    self.lyrics.translation_snapshot()
+                                } else {
+                                    LyricsTranslationSnapshot::default()
+                                };
+                                let cur_sec = self.state.current_time;
+                                let has_track =
+                                    !self.state.title.is_empty() && !self.state.artist.is_empty();
+                                let track_header = if has_track {
+                                    format!("{} • {}", self.state.title, self.state.artist)
+                                } else {
+                                    text(self.language, "Parça Seçilmedi")
+                                };
+
+                                panel
+                                    .gap(px(10.0))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .child(
+                                                div()
+                                                    .text_size(px(13.0))
+                                                    .font_weight(gpui::FontWeight::BOLD)
+                                                    .text_color(rgb(pal.accent_soft_text))
+                                                    .child(text(self.language, "Şarkı Sözleri")),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap(px(6.0))
+                                                    .when(has_track, |bar| {
+                                                        bar.child(
+                                                            div()
+                                                                .id("toggle-lyrics-translation")
+                                                                .px(px(6.0))
+                                                                .py(px(3.0))
+                                                                .rounded(px(5.0))
+                                                                .bg(if self.lyrics_translation_enabled {
+                                                                    rgb(pal.bg_row_active)
+                                                                } else {
+                                                                    rgb(pal.bg_chip)
+                                                                })
+                                                                .hover(|s| s.bg(rgb(pal.bg_chip_hover)))
+                                                                .cursor_pointer()
+                                                                .flex()
+                                                                .items_center()
+                                                                .justify_center()
+                                                                .text_size(px(10.5))
+                                                                .text_color(if self.lyrics_translation_enabled {
+                                                                    rgb(pal.accent_soft_text)
+                                                                } else {
+                                                                    rgb(pal.text_secondary)
+                                                                })
+                                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                                    this.lyrics_translation_enabled =
+                                                                        !this.lyrics_translation_enabled;
+                                                                    if this.lyrics_translation_enabled {
+                                                                        this.lyrics.clear_translation_error();
+                                                                        this.ensure_lyrics_translation();
+                                                                    }
+                                                                    cx.notify();
+                                                                }))
+                                                                .child(text(self.language, "Çevir")),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .id("refresh-lyrics-btn")
+                                                                .p(px(4.0))
+                                                                .rounded(px(5.0))
+                                                                .bg(rgb(pal.bg_chip))
+                                                                .hover(|s| s.bg(rgb(pal.bg_chip_hover)))
+                                                                .cursor_pointer()
+                                                                .flex()
+                                                                .items_center()
+                                                                .justify_center()
+                                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                                    this.lyrics.force_refresh(
+                                                                        &this.state.title,
+                                                                        &this.state.artist,
+                                                                        this.state.duration,
+                                                                    );
+                                                                    cx.notify();
+                                                                }))
+                                                                .child(lucide_icon(
+                                                                    "refresh-cw",
+                                                                    12.0,
+                                                                    rgb(pal.accent_bright),
+                                                                )),
+                                                        )
+                                                    })
+                                                    .child(
+                                                        div()
+                                                            .id("close-lyrics-panel")
+                                                            .p(px(4.0))
+                                                            .rounded(px(5.0))
+                                                            .bg(rgb(pal.bg_chip))
+                                                            .hover(|s| s.bg(rgb(pal.bg_chip_hover)))
+                                                            .cursor_pointer()
+                                                            .flex()
+                                                            .items_center()
+                                                            .justify_center()
+                                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                                this.search_focused = false;
+                                                                this.lyrics_drawer_open = false;
+                                                                cx.notify();
+                                                            }))
+                                                            .child(lucide_icon(
+                                                                "x",
+                                                                12.5,
+                                                                rgb(pal.text_primary),
+                                                            )),
+                                                    ),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(11.0))
+                                            .text_color(rgb(pal.text_muted))
+                                            .child(track_header),
+                                    )
+                                    .when(
+                                        self.lyrics_translation_enabled
+                                            && lyrics_translation.loading,
+                                        |panel| {
+                                            panel.child(
+                                                div()
+                                                    .text_size(px(10.5))
+                                                    .text_color(rgb(pal.text_muted))
+                                                    .child(text(
+                                                        self.language,
+                                                        "Çevriliyor...",
+                                                    )),
+                                            )
+                                        },
+                                    )
+                                    .when(
+                                        self.lyrics_translation_enabled
+                                            && lyrics_translation.error.is_some(),
+                                        |panel| {
+                                            panel.child(
+                                                div()
+                                                    .text_size(px(10.5))
+                                                    .text_color(rgb(pal.text_muted))
+                                                    .child(
+                                                        lyrics_translation
+                                                            .error
+                                                            .as_deref()
+                                                            .unwrap_or("Çeviri yüklenemedi, tekrar deneyin.")
+                                                            .to_string(),
+                                                    ),
+                                            )
+                                        },
+                                    )
+                                    .child(
+                                        div()
+                                            .id("lyrics-content-scroll")
+                                            .flex_1()
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(6.0))
+                                            .overflow_y_scroll()
+                                            .track_scroll(&self.lyrics_scroll_handle)
+                                            .map(|scroll_box| match lyrics_snapshot {
+                                                LyricsState::Idle => scroll_box.child(
+                                                    div()
+                                                        .py(px(24.0))
+                                                        .text_size(px(12.0))
+                                                        .text_color(rgb(pal.text_muted))
+                                                        .child(text(
+                                                            self.language,
+                                                            "Şarkı sözleri için bir parça çal.",
+                                                        )),
+                                                ),
+                                                LyricsState::Loading { .. } => scroll_box.child(
+                                                    div()
+                                                        .py(px(24.0))
+                                                        .text_size(px(12.0))
+                                                        .text_color(rgb(pal.accent_bright))
+                                                        .child(text(
+                                                            self.language,
+                                                            "Şarkı sözleri yükleniyor...",
+                                                        )),
+                                                ),
+                                                LyricsState::NotFound { .. } => scroll_box.child(
+                                                    div()
+                                                        .py(px(24.0))
+                                                        .text_size(px(12.0))
+                                                        .text_color(rgb(pal.text_muted))
+                                                        .child(text(
+                                                            self.language,
+                                                            "Bu parça için şarkı sözü bulunamadı.",
+                                                        )),
+                                                ),
+                                                LyricsState::Error { message, .. } => {
+                                                    scroll_box.child(
+                                                        div()
+                                                            .py(px(24.0))
+                                                            .text_size(px(12.0))
+                                                            .text_color(rgb(pal.text_muted))
+                                                            .child(format!(
+                                                                "{}: {}",
+                                                                text(self.language, "Şarkı sözleri yüklenemedi"),
+                                                                message
+                                                            )),
+                                                    )
+                                                }
+                                                LyricsState::Loaded(track) => {
+                                                    if track.instrumental {
+                                                        scroll_box.child(
+                                                            div()
+                                                                .py(px(24.0))
+                                                                .text_size(px(12.5))
+                                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                                .text_color(rgb(pal.accent_soft_text))
+                                                                .child(text(
+                                                                    self.language,
+                                                                    "Enstrümantal parça",
+                                                                )),
+                                                        )
+                                                    } else {
+                                                        let translation_lines =
+                                                                lyrics_translation.lines.as_ref();
+
+                                                        if !track.synced.is_empty() {
+                                                        let active_idx =
+                                                            active_line_index(&track.synced, cur_sec);
+                                                        let spacer_height = (self
+                                                            .lyrics_scroll_handle
+                                                            .bounds()
+                                                            .size
+                                                            .height
+                                                            / 2.0)
+                                                            .max(window.bounds().size.height / 2.0)
+                                                            .max(px(120.0));
+                                                        let scroll_box = scroll_box
+                                                            .child(div().h(spacer_height));
+                                                        if let Some(idx) = active_idx {
+                                                            if self.last_scrolled_lyric_idx
+                                                                != Some(idx)
+                                                            {
+                                                                self.last_scrolled_lyric_idx =
+                                                                    Some(idx);
+                                                                let scroll_index = idx + 1;
+                                                                self.lyrics_scroll_handle
+                                                                    .scroll_to_item(scroll_index);
+                                                                let scroll_handle = self
+                                                                    .lyrics_scroll_handle
+                                                                    .clone();
+                                                                cx.on_next_frame(
+                                                                    window,
+                                                                    move |_, _, cx| {
+                                                                        if let Some(item_bounds) =
+                                                                            scroll_handle
+                                                                                .bounds_for_item(
+                                                                                    scroll_index,
+                                                                                )
+                                                                        {
+                                                                            let viewport_bounds =
+                                                                                scroll_handle
+                                                                                    .bounds();
+                                                                            let current_offset =
+                                                                                scroll_handle
+                                                                                    .offset();
+                                                                            let centered_y =
+                                                                                viewport_bounds
+                                                                                    .center()
+                                                                                    .y
+                                                                                    - item_bounds
+                                                                                        .center()
+                                                                                        .y;
+                                                                            let max_offset =
+                                                                                scroll_handle
+                                                                                    .max_offset()
+                                                                                    .y;
+                                                                                scroll_handle.set_offset(
+                                                                                    gpui::point(
+                                                                                        current_offset
+                                                                                            .x,
+                                                                                        centered_y
+                                                                                            .clamp(
+                                                                                                -max_offset,
+                                                                                                px(0.0),
+                                                                                            ),
+                                                                                    ),
+                                                                                );
+                                                                            cx.notify();
+                                                                        }
+                                                                    },
+                                                                );
+                                                            }
+                                                        }
+                                                        scroll_box
+                                                            .children(
+                                                                track
+                                                                    .synced
+                                                                    .into_iter()
+                                                                    .enumerate()
+                                                                    .map(|(l_idx, line)| {
+                                                                        let is_active =
+                                                                            active_idx == Some(l_idx);
+                                                                        let target_time =
+                                                                            line.time_sec;
+                                                                        let line_text = if line
+                                                                            .text
+                                                                            .trim()
+                                                                            .is_empty()
+                                                                        {
+                                                                            "♪".to_string()
+                                                                        } else {
+                                                                            line.text
+                                                                        };
+                                                                        let row = div()
+                                                                            .id(ElementId::Name(
+                                                                                format!(
+                                                                                    "lyric-line-{l_idx}"
+                                                                                )
+                                                                                .into(),
+                                                                            ))
+                                                                            .flex()
+                                                                            .flex_col()
+                                                                            .px(px(8.0))
+                                                                            .py(px(5.0))
+                                                                            .rounded(px(6.0))
+                                                                            .bg(if is_active {
+                                                                                rgb(pal.bg_row_active)
+                                                                            } else {
+                                                                                rgba(0x00000000)
+                                                                            })
+                                                                            .hover(|s| {
+                                                                                s.bg(rgb(
+                                                                                    pal.bg_row_hover,
+                                                                                ))
+                                                                            })
+                                                                            .cursor_pointer()
+                                                                            .text_size(if is_active {
+                                                                                px(13.0)
+                                                                            } else {
+                                                                                px(12.0)
+                                                                            })
+                                                                            .font_weight(if is_active {
+                                                                                gpui::FontWeight::BOLD
+                                                                            } else {
+                                                                                gpui::FontWeight::NORMAL
+                                                                            })
+                                                                            .text_color(if is_active {
+                                                                                rgb(pal.accent_bright)
+                                                                            } else {
+                                                                                rgb(pal.text_secondary)
+                                                                            })
+                                                                            .on_click(cx.listener(
+                                                                                move |this, _, _, cx| {
+                                                                                    if this.state.duration
+                                                                                        > 0.0
+                                                                                    {
+                                                                                        this.last_seek_at =
+                                                                                            Instant::now();
+                                                                                        this.state
+                                                                                            .current_time =
+                                                                                            target_time;
+                                                                                        this.engine
+                                                                                            .seek_to(
+                                                                                                target_time,
+                                                                                            );
+                                                                                        cx.notify();
+                                                                                    }
+                                                                                },
+                                                                            ))
+                                                                            .child(line_text);
+                                                                        if let Some(translated) =
+                                                                            translation_lines
+                                                                                .as_ref()
+                                                                                .and_then(|lines| lines.get(l_idx))
+                                                                                .filter(|line| !line.trim().is_empty())
+                                                                        {
+                                                                            row.child(
+                                                                                div()
+                                                                                    .mt(px(2.0))
+                                                                                    .text_size(px(10.5))
+                                                                                    .text_color(if is_active {
+                                                                                        rgb(pal.accent_soft_text)
+                                                                                    } else {
+                                                                                        rgb(pal.text_muted)
+                                                                                    })
+                                                                                    .child(translated.clone()),
+                                                                            )
+                                                                        } else {
+                                                                            row
+                                                                        }
+                                                                    }),
+                                                            )
+                                                            .child(div().h(spacer_height))
+                                                        } else if let Some(plain) = track.plain {
+                                                            scroll_box.children(
+                                                                plain.lines().enumerate().map(
+                                                                    |(p_idx, line)| {
+                                                                        let row = div()
+                                                                            .id(ElementId::Name(
+                                                                                format!(
+                                                                                    "plain-lyric-{p_idx}"
+                                                                                )
+                                                                                .into(),
+                                                                            ))
+                                                                            .flex()
+                                                                            .flex_col()
+                                                                            .px(px(6.0))
+                                                                            .py(px(3.0))
+                                                                            .text_size(px(12.0))
+                                                                            .text_color(rgb(
+                                                                                pal.text_secondary,
+                                                                            ))
+                                                                            .child(line.to_string());
+                                                                        if let Some(translated) =
+                                                                            translation_lines
+                                                                                .as_ref()
+                                                                                .and_then(|lines| lines.get(p_idx))
+                                                                                .filter(|line| !line.trim().is_empty())
+                                                                        {
+                                                                            row.child(
+                                                                                div()
+                                                                                    .mt(px(2.0))
+                                                                                    .text_size(px(10.5))
+                                                                                    .text_color(rgb(pal.text_muted))
+                                                                                    .child(translated.clone()),
+                                                                            )
+                                                                        } else {
+                                                                            row
+                                                                        }
+                                                                    },
+                                                                ),
+                                                            )
+                                                    } else {
+                                                        scroll_box.child(
+                                                            div()
+                                                                .py(px(24.0))
+                                                                .text_size(px(12.0))
+                                                                .text_color(rgb(pal.text_muted))
+                                                                .child(text(
+                                                                    self.language,
+                                                                    "Bu parça için şarkı sözü bulunamadı.",
+                                                                )),
+                                                        )
+                                                    }
+                                                    }
+                                                }
+                                            }),
+                                    )
+                            })
+                            .when(!self.lyrics_drawer_open && self.queue_drawer_open, |panel| {
                                 panel
                                     .gap(px(10.0))
                                     .child(
@@ -3963,7 +4597,7 @@ impl Render for NocturneApp {
                                             )),
                                     )
                             })
-                            .when(!self.queue_drawer_open, |panel| {
+                            .when(!self.lyrics_drawer_open && !self.queue_drawer_open, |panel| {
                                 panel
                                     .items_center()
                                     .justify_center()
@@ -4389,12 +5023,12 @@ impl Render for NocturneApp {
 
 #[cfg(windows)]
 fn register_windows_app_identity() {
-    use windows::core::{w, HSTRING, PCWSTR};
     use windows::Win32::System::Registry::{
-        RegCreateKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_WRITE,
-        REG_OPTION_NON_VOLATILE, REG_SZ,
+        HKEY, HKEY_CURRENT_USER, KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCreateKeyExW,
+        RegSetValueExW,
     };
     use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
+    use windows::core::{HSTRING, PCWSTR, w};
 
     const AUMID: &str = "com.egehansimarikk.nocturne";
 
@@ -4420,8 +5054,7 @@ fn register_windows_app_identity() {
         {
             let set_str = |name: PCWSTR, val: &str| {
                 let wide: Vec<u16> = val.encode_utf16().chain(std::iter::once(0)).collect();
-                let bytes =
-                    std::slice::from_raw_parts(wide.as_ptr() as *const u8, wide.len() * 2);
+                let bytes = std::slice::from_raw_parts(wide.as_ptr() as *const u8, wide.len() * 2);
                 let _ = RegSetValueExW(hkey, name, None, REG_SZ, Some(bytes));
             };
 
@@ -4442,18 +5075,54 @@ fn main() {
     let app = gpui_platform::application().with_assets(NocturneAssets);
 
     app.run(|cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(1180.0), px(760.0)), cx);
+        let config = AppConfig::load();
+        let window_size = match (config.window_width, config.window_height) {
+            (Some(width), Some(height)) if width.is_finite() && height.is_finite() => {
+                size(px(width.max(860.0)), px(height.max(600.0)))
+            }
+            _ => size(px(1180.0), px(760.0)),
+        };
+        let restored_origin = match (config.window_x, config.window_y) {
+            (Some(x), Some(y)) if x.is_finite() && y.is_finite() => {
+                let origin = point(px(x), px(y));
+                cx.displays()
+                    .iter()
+                    .any(|display| display.bounds().contains(&origin))
+                    .then_some(origin)
+            }
+            _ => None,
+        };
+        let bounds = restored_origin
+            .map(|origin| Bounds {
+                origin,
+                size: window_size,
+            })
+            .unwrap_or_else(|| Bounds::centered(None, window_size, cx));
+        let initially_maximized = config.window_maximized;
+        let window_bounds = if initially_maximized {
+            WindowBounds::Maximized(bounds)
+        } else {
+            WindowBounds::Windowed(bounds)
+        };
         let window_handle = cx
             .open_window(
                 WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    window_bounds: Some(window_bounds),
                     titlebar: Some(TitlebarOptions {
                         title: Some("Nocturne".into()),
                         ..Default::default()
                     }),
                     ..Default::default()
                 },
-                |_, cx| cx.new(NocturneApp::new),
+                |window, cx| {
+                    cx.new(|cx| {
+                        cx.observe_window_bounds(window, |app: &mut NocturneApp, window, _cx| {
+                            app.update_window_state(window);
+                        })
+                        .detach();
+                        NocturneApp::new(cx, bounds, initially_maximized)
+                    })
+                },
             )
             .expect("GPUI ana penceresi açılamadı");
 
