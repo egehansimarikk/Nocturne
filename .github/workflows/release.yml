@@ -1,0 +1,115 @@
+name: Build & Release Windows Installer
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Sürüm Numarası (örn: 0.2.0)'
+        required: true
+        default: '0.2.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-installer:
+    runs-on: windows-latest
+    env:
+      LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+      LASTFM_API_SECRET: ${{ secrets.LASTFM_API_SECRET }}
+      DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Extract Version
+        id: ver
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_NAME -and $env:GITHUB_REF_NAME.StartsWith("v")) {
+            $v = $env:GITHUB_REF_NAME.Substring(1)
+          } elseif ("${{ github.event.inputs.version }}" -ne "") {
+            $v = "${{ github.event.inputs.version }}"
+          } else {
+            $v = "0.2.0"
+          }
+          echo "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Build Release Binary
+        run: cargo build --release --locked
+
+      - name: Compile Inno Setup Installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $candidates = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe",
+            "${env:ProgramFiles}\Inno Setup 7\ISCC.exe",
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
+          )
+          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            choco install innosetup -y
+            $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+          if (-not $iscc) {
+            $cmd = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+            if ($cmd) { $iscc = $cmd.Source }
+          }
+          if (-not $iscc) {
+            throw "ISCC.exe bulunamadı!"
+          }
+          Write-Host "Kullanılan ISCC: $iscc"
+          & $iscc "/DAppVersion=${{ steps.ver.outputs.version }}" "installer\nocturne.iss"
+
+      - name: Create GitHub Release & Upload Installer
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: Nocturne v${{ steps.ver.outputs.version }}
+          files: dist\Nocturne-Setup-*.exe
+          draft: false
+          prerelease: false
+          body: |
+            ## Nocturne v${{ steps.ver.outputs.version }} — Native Rust & GPUI Rewrite
+
+            ### 🇬🇧 English — What's New & Highlights
+            - **Native Rust & GPUI Architecture:** Completely rewritten from C#/.NET into a high-performance, low-memory native Rust + GPUI desktop client.
+            - **Hi-Fi Audio Engine & 10-Band EQ:** Real-time BiQuad 10-band graphic equalizer, preamp control, custom preset management, and WASAPI output verification.
+            - **Social Integrations:** Built-in Discord Rich Presence and automatic Last.fm Scrobbling support.
+            - **In-App Update Checker:** Check and download new GitHub releases directly from the top bar or **Settings > Connections**.
+            - **Multi-Theme & Multi-Language UI:** Dynamic album cover ambient lighting, customizable themes, and multi-language interface.
+
+            #### Installation (Windows)
+            1. Download `Nocturne-Setup-v${{ steps.ver.outputs.version }}-win64.exe` from the **Assets** section below.
+            2. Run the setup wizard to install Nocturne and sign in with your Deezer account.
+
+            ---
+
+            ### 🇹🇷 Türkçe — Yenilikler & Öne Çıkanlar
+            - **Native Rust & GPUI Mimarisi:** C#/.NET altyapısından yüksek performanslı, düşük bellek tüketimli Rust + GPUI masaüstü arayüzüne geçildi.
+            - **Hi-Fi Ses Motoru & 10-Bant EQ:** Gerçek zamanlı BiQuad 10-bant grafik ekolayzer, preamp kontrolü, özel preset yönetimi ve WASAPI ses çıkış doğrulaması eklendi.
+            - **Sosyal Entegrasyonlar:** Dahili Discord Rich Presence ve otomatik Last.fm Scrobbling desteği eklendi.
+            - **Uygulama İçi Güncelleme Denetleyicisi:** Üst bardan veya **Ayarlar > Bağlantılar** sekmesinden yeni GitHub sürümlerini tek tıkla kontrol edip indirme desteği eklendi.
+            - **Çoklu Tema & Dil Desteği:** Dinamik albüm kapağı ambiyans renklendirmesi, özelleştirilebilir temalar ve çok dilli arayüz.
+
+            #### Kurulum (Windows)
+            1. Aşağıdaki **Assets** bölümünden `Nocturne-Setup-v${{ steps.ver.outputs.version }}-win64.exe` kurulum dosyasını indirin.
+            2. Kurulum sihirbazını çalıştırarak Nocturne'ü kurun ve Deezer hesabınızla giriş yapın.
+
+            ---
+            ### Changelog / Değişiklik Geçmişi
+          generate_release_notes: true

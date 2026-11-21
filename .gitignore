@@ -1,0 +1,26 @@
+# Rust build çıktıları (10K değişikliğin ana sebebi)
+/target/
+**/*.rs.bk
+
+# Paketleme ve kurulum çıktıları
+/dist/
+/Output/
+*.exe
+*.msi
+*.zip
+
+# Ortam değişkenleri ve API anahtarları
+.env
+.env.*
+
+# Yerel araç ve geliştirme klasörleri
+.freebuff/
+.claude/
+.vs/
+.vscode/
+.idea/
+
+# Geçici not ve sistem dosyaları
+klasor yapisi.txt
+Thumbs.db
+.DS_Store
