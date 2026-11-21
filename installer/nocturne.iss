@@ -1,15 +1,19 @@
+#ifndef AppVersion
+  #define AppVersion "0.2.0"
+#endif
+
 [Setup]
 AppId={{8E4F3A21-7C9B-4D1E-9A62-3F8B1C5D4E90}
 AppName=Nocturne
-AppVersion=0.2.0
+AppVersion={#AppVersion}
 AppPublisher=egehansimarikk
 AppPublisherURL=https://github.com/egehansimarikk/nocturne
 DefaultDirName={autopf}\Nocturne
 DefaultGroupName=Nocturne
 UninstallDisplayIcon={app}\nocturne.exe
-SetupIconFile=assets\nocturne.ico
-OutputDir=Output
-OutputBaseFilename=NocturneSetup-0.2.0-win-x64
+SetupIconFile=..\assets\nocturne.ico
+OutputDir=..\dist
+OutputBaseFilename=Nocturne-Setup-v{#AppVersion}-win64
 Compression=lzma2/ultra64
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
@@ -49,8 +53,9 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Type: filesandordirs; Name: "{app}\*"
 
 [Files]
-Source: "target\release\nocturne.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "assets\nocturne.ico"; DestDir: "{app}\assets"; Flags: ignoreversion
+Source: "..\target\release\nocturne.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\target\release\*.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\assets\nocturne.ico"; DestDir: "{app}\assets"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Nocturne"; Filename: "{app}\nocturne.exe"; IconFilename: "{app}\assets\nocturne.ico"
